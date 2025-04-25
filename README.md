@@ -2,7 +2,7 @@
 QT版微信4.0 防撤回 + 提醒
 
 ## 原理
-文章: ...
+文章: [微信4.0防撤回+提醒 (符号恢复+字符串解密)](https://bbs.kanxue.com/thread-286611.htm)
 
 ## 使用方法
 1. 从[Release](https://github.com/EEEEhex/RevokeHook/releases)下载RevokeHookUI(这个软件只是使用WTL封装了一个GUI, 用于特征码搜索和DLL替换).
