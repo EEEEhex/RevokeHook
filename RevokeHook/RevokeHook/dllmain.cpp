@@ -48,13 +48,14 @@ extern "C" uint64_t g_a3_offset = 0;                    //父函数的第三个�
 uint64_t g_last_org_srvid = 0;                          //真实的srvid 防止插入两条撤回提醒
 std::vector<uint8_t> g_last_unique_id = {};             //上一次生成的
 
-//关键类中成员的偏移信息
-struct KeyClassOffset
+//配置信息 包括关键类中成员的偏移信息
+struct CONFIGINFO
 {
     int srvid;
     int revoke_msg;
     int wxid;
-}g_key_class_offset;
+    bool revoke_self;
+}g_config_info;
 
 //std::string的内存布局
 struct StdString
@@ -203,9 +204,26 @@ void HookEnd()
  */
 uint64_t HijackLogic(uint64_t a3/*rcx -> rdi*/)
 {
-    int srvid_offset = g_key_class_offset.srvid;
-    int revoke_msg_offset = g_key_class_offset.revoke_msg;
+    int srvid_offset = g_config_info.srvid;
+    int revoke_msg_offset = g_config_info.revoke_msg;
     uint64_t key_class = *((uint64_t*)(a3 + g_a3_offset));
+
+    //先读取撤回提醒字符串 根据字符串判断是否为自己撤回的
+    uint64_t mem_revoke_msg_str_addr = key_class + revoke_msg_offset;
+    StdString* mem_revoke_msg_str = (StdString*)mem_revoke_msg_str_addr;
+    uint64_t revoke_msg_addr = mem_revoke_msg_str_addr;
+    if (mem_revoke_msg_str->capability >= 0x10) {//大于16个字节的另申请内存
+        revoke_msg_addr = *((uint64_t*)revoke_msg_addr);
+    }
+    std::vector<uint8_t> revoke_msg_utf8(mem_revoke_msg_str->size);//读取原撤回提醒字符串的数据
+    ReadProcessMemory(GetCurrentProcess(), (LPCVOID)revoke_msg_addr, revoke_msg_utf8.data(), mem_revoke_msg_str->size, NULL);
+
+    bool is_self_revoke = false;
+    if (revoke_msg_utf8[0] == 0xe4 && revoke_msg_utf8[1] == 0xbd && revoke_msg_utf8[2] == 0xa0)
+        is_self_revoke = true;  //'你' utf-8
+    
+    if (!g_config_info.revoke_self && is_self_revoke)
+        return 0;               //不防撤回自己撤回操作 且是自己撤回的
 
     //修改srvid为随机的
     std::vector<uint8_t> rand_srvid = GetUniquePositiveValue();
@@ -232,15 +250,6 @@ uint64_t HijackLogic(uint64_t a3/*rcx -> rdi*/)
     }
 
     //修改撤回提醒字符串
-    uint64_t mem_revoke_msg_str_addr = key_class + revoke_msg_offset;
-    StdString* mem_revoke_msg_str = (StdString*)mem_revoke_msg_str_addr;
-    uint64_t revoke_msg_addr = mem_revoke_msg_str_addr;
-    if (mem_revoke_msg_str->capability >= 0x10) {//大于16个字节的另申请内存
-        revoke_msg_addr = *((uint64_t*)revoke_msg_addr);
-    }
-    std::vector<uint8_t> revoke_msg_utf8(mem_revoke_msg_str->size);//读取原撤回提醒字符串的数据
-    ReadProcessMemory(GetCurrentProcess(), (LPCVOID)revoke_msg_addr, revoke_msg_utf8.data(), mem_revoke_msg_str->size, NULL);
-
     size_t anchor_pos = -1; //'一条'的位置 将其修改为'如上'
     std::vector<uint8_t> anchor = { 0xe4, 0xb8, 0x80, 0xe6, 0x9d, 0xa1 }; //'一条' utf-8
     auto it = std::search(revoke_msg_utf8.begin(), revoke_msg_utf8.end(), anchor.begin(), anchor.end());
@@ -340,9 +349,10 @@ void ReadExternalConfig()
     g_config.load("RevokeHook.ini");
     g_hook_offset = g_config["Hook"]["Offset"].as<int>();
     g_a3_offset = g_config["Hook"]["A3Offset"].as<int>();
-    g_key_class_offset.srvid = g_config["Class"]["SrvID"].as<int>();
-    g_key_class_offset.revoke_msg = g_config["Class"]["RevokeMsg"].as<int>();
-    g_key_class_offset.wxid = g_config["Class"]["WxID"].as<int>();
+    g_config_info.srvid = g_config["Class"]["SrvID"].as<int>();
+    g_config_info.revoke_msg = g_config["Class"]["RevokeMsg"].as<int>();
+    g_config_info.wxid = g_config["Class"]["WxID"].as<int>();
+    g_config_info.revoke_self = g_config["Setting"]["RevokeSelf"].as<bool>();
     OutputDebugPrintf("[RevokeHook] Use Offset: 0x%llX...", g_hook_offset);
 }
 
