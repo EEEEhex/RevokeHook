@@ -159,7 +159,8 @@ def get_find_sig() -> Callable[[list, int, DeAsmInfo], Tuple[bool, int]]:
                 lea2_op2_addr = idc.get_name_ea_simple(lea2_op2)
                 if (lea1_op2_addr == idc.BADADDR) or (lea2_op2_addr == idc.BADADDR):
                     continue  #不是需要的lea
-                if ida_bytes.get_byte(lea1_op2_addr) != 0:
+                data_size = idc.get_item_size(enc_data_addr)
+                if (data_size == 1) or (data_size > 200): #通过大小判断哪个是加密数据存放地址
                     enc_data_addr = lea1_op2_addr   #加密数据的地址
                     dec_data_addr = lea2_op2_addr   #解密字符串放置的地址
                     lea_enc_data_index = xor_index + after_index
@@ -409,7 +410,7 @@ def emu_destring_logic(de_info:DeAsmInfo) -> str:
             bytes: 数据
         """
         read_size = data_size if data_size != None else idc.get_item_size(enc_data_addr)
-        if read_size == 1: #说明该符号并未被IDA识别为数组
+        if (read_size == 1) or (read_size < 100): #说明该符号并未被IDA识别为数组
             #一个加密数据的数组, 一般是以多个0作为结尾. 或者找到下一个符号处也可
             next_head_addr = idc.next_head(enc_data_addr)
             if next_head_addr != idc.BADADDR: 
