@@ -1,30 +1,19 @@
 # RevokeHook
 QT版微信4.0 防撤回 + 提醒
   
-❗**据反馈，dll劫持会被风控检测到，请等待代码注入方案写完后再进行使用测试**❗
+❗**请使用[v3.0](https://github.com/EEEEhex/RevokeHook/releases)以上的版本, 自此版本后不再使用dll劫持, 改为反射注入, 不会破坏本地文件完整性**❗
 
 ## 原理
 文章: [微信4.0防撤回+提醒 (符号恢复+字符串解密)](https://bbs.kanxue.com/thread-286611.htm)
 
 ## 使用方法
->v1.x和v2.x使用的是不同的hook思路, 具体思路请查看上面的原理文章.  
->使用起来的具体不同为:  
->v1.x自己的撤回操作和原逻辑一致. 但只能在消息末尾插入'撤回提醒', 无法知道对方撤回的具体是第几条消息.  
->v2.x自己撤回的消息还是会在本地显示. 但会在对方撤回的消息下面直接插入'撤回提醒', 可以知道具体撤回的是哪条消息.  
+### 1. 搜索偏移
+* 打开RevokeHookUI, 点击搜索, 将两个 \[√\] \[0x...\] 偏移分别填入到Offset和DelMsg处, 然后点击'保存'
+* 或点击'云端'使用云端已经设置好的版本偏移, 然后点击'保存'  
+![image](https://github.com/user-attachments/assets/5aedde9d-9631-484a-9a53-96a986388782)
 
-### v2.x
-1. 从[Release](https://github.com/EEEEhex/RevokeHook/releases)下载RevokeHookUI(这个软件只是使用WTL封装了一个GUI, 用于特征码搜索和DLL替换)
-2. 点击'搜索', 复制两个偏移分别到两个编辑框中:  
-![image](https://github.com/user-attachments/assets/eb608a16-e3a4-4fef-ab7c-f4013ea3f086)  
-3. 点击'保存'将配置数据更新到RevokeHook.ini中.  
-4. 点击'替换'将配置ini复制到微信目录下,并将劫持Dll替换到微信版本目录下.  
 
-### v1.x
-1. 从[Release](https://github.com/EEEEhex/RevokeHook/releases)下载RevokeHookUI.
-2. 点击'搜索', 去搜索偏移, 复制偏移+8到Hook的Offset处:  
-![image](https://github.com/user-attachments/assets/45f7e86c-d615-4912-95d2-3b75eee97c59)  
-3. 点击'保存'将配置数据更新到RevokeHook.ini中.
-4. 点击'替换'将配置ini复制到微信目录下,并将劫持Dll替换到微信版本目录下.  
-  
-如果特征码搜索不到可以用010editor等工具打开Weixin.dll搜一下, 我用的特征码搜索代码是网上找的SunDay算法, 有点小问题.
+### 2. 注入Hook逻辑
+* 运行RevokeInject, 将自动反射注入Hook逻辑到微信进程中, 并抹去部分特征
+* 微信为运行或未运行状态都可, 若微信未运行RevokeInject会自动启动微信
 
