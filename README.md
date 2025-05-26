@@ -1,5 +1,5 @@
 # RevokeHook
-QT版微信4.0 防撤回 + 提醒
+QT版微信4.0 防撤回 + 提醒, 请在[Discussions](https://github.com/EEEEhex/RevokeHook/discussions/12)处反馈使用过程中出现的警告等问题  
   
 ❗**请使用[v3.0](https://github.com/EEEEhex/RevokeHook/releases)以上的版本, 自此版本后不再使用dll劫持, 改为反射注入, 不会破坏本地文件完整性**❗
 
