@@ -19,6 +19,12 @@
 			"sig1_delta": 0,
 			"sig2_delta": 33,
 			"tips": "[注意] sig2请使用第二个偏移 (若sig2搜索不到, 请查看Config.json使用4.0.5的sig2和delta)"
+		},
+		"4.1.0.00":{
+			"sig1": "48 83 EC ?? 48 ?? ?? C6 44 24 ?? 00 E8 ?? ?? ?? ?? 48 ?? ?? 48 83 C4 ??",
+			"sig2": "48 8B 8D ?? ?? ?? ?? 48 8D 95 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B 8D ?? ?? ?? ?? 48 8D ?? ?? 45 31 C0 E8 ?? ?? ?? ?? 48 8B ??",
+			"sig1_delta": 0,
+			"sig2_delta": 33
 		}
 	},
 	"ini":{
@@ -166,6 +172,16 @@
 			"Hook":{
 				"Offset":"0x2D3E141",
 				"DelMsg":"0x2E1EF1B"
+			},
+			"Class":{
+				"SrvID":"0xC0",
+				"RevokeMsg":"0x118"
+			}
+		},
+		"4.1.0.14":{
+			"Hook":{
+				"Offset":"0x2A81671",
+				"DelMsg":"0x2B54F16"
 			},
 			"Class":{
 				"SrvID":"0xC0",
