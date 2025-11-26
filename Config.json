@@ -309,6 +309,16 @@
 				"SrvID":"0xC0",
 				"RevokeMsg":"0x118"
 			}
+		},
+		"4.1.5.16":{
+			"Hook":{
+				"Offset":"0x2F3E091",
+				"DelMsg":"0x2EA89D6"
+			},
+			"Class":{
+				"SrvID":"0xC0",
+				"RevokeMsg":"0x118"
+			}
 		}
 	}
 }
