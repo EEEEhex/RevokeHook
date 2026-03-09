@@ -69,6 +69,17 @@
 			"srvid_offset": 192,
 			"revokemsg_offset": 280,
 			"tips": "[注意] WX 4.1.4.00+及以上需要使用RevokeHook v3.4.0+"
+		},
+		"4.1.7.57":{
+			"sig1": "48 83 EC ?? 4C ?? ?? 48 ?? ?? C6 44 24 ?? 00 4D ?? ?? 49 ?? ?? E8 ?? ?? ?? ?? 48 ?? ?? 48 83 C4 ??",
+			"sig2": "48 8D 55 ?? 45 31 C0 E8 ?? ?? ?? ?? 90 48 8B 9D ?? ?? ?? ?? 48 85 DB 74 ?? F0 FF 4B 08",
+			"sig1_delta": 0,
+			"sig2_delta": 7,
+			"sig1_rsize": 21,
+			"sig2_rsize": 5,
+			"arg_pos": 4,
+			"srvid_offset": 264,
+			"revokemsg_offset": 384
 		}
 	},
 	"ini":{
@@ -380,6 +391,16 @@
 			"Class":{
 				"SrvID":"0xC0",
 				"RevokeMsg":"0xF8"
+			}
+		},
+		"4.1.7.57":{
+			"Hook":{
+				"Offset":"0x32E0A71",
+				"DelMsg":"0x211DD2E"
+			},
+			"Class":{
+				"SrvID":"0x108",
+				"RevokeMsg":"0x180"
 			}
 		}
 	}
