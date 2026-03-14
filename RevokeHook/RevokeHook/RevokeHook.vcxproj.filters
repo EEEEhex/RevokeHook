@@ -21,7 +21,10 @@
     <ClInclude Include="inicpp.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="wrapper.h">
+    <ClInclude Include="ReflectiveLoader.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="vehbp.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
@@ -29,10 +32,11 @@
     <ClCompile Include="dllmain.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <MASM Include="wrapper.asm">
+    <ClCompile Include="ReflectiveLoader.c">
       <Filter>源文件</Filter>
-    </MASM>
+    </ClCompile>
+    <ClCompile Include="vehbp.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

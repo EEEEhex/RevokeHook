@@ -132,17 +132,15 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="vehbp.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="inicpp.h" />
-    <ClInclude Include="wrapper.h" />
+    <ClInclude Include="ReflectiveLoader.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="vehbp.cpp" />
     <ClCompile Include="dllmain.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <MASM Include="wrapper.asm">
-      <FileType>Document</FileType>
-    </MASM>
+    <ClCompile Include="ReflectiveLoader.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

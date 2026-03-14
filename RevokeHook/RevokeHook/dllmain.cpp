@@ -9,53 +9,50 @@
 #include <random>
 #include <algorithm>
 
+#include "vehbp.h"
+
 //用于读取ini配置
 #include "inicpp.h" 
-
-//x64汇编
-#include "wrapper.h"
 
 //用于计算MD5
 #pragma comment(lib, "crypt32.lib")
 
-// 劫持ilink2.dll -> ilink2Org.dll
-#pragma comment(linker, "/EXPORT:CreateIlinkNetwork=ilink2Org.CreateIlinkNetwork,@1")
-#pragma comment(linker, "/EXPORT:CreateNetworkManager=ilink2Org.CreateNetworkManager,@2")
-#pragma comment(linker, "/EXPORT:CreateNetworkManagerBridge=ilink2Org.CreateNetworkManagerBridge,@3")
-#pragma comment(linker, "/EXPORT:CreateNetworkManagerNoSTL=ilink2Org.CreateNetworkManagerNoSTL,@4")
-#pragma comment(linker, "/EXPORT:CreateTdiManager=ilink2Org.CreateTdiManager,@5")
-#pragma comment(linker, "/EXPORT:DeleteIlinkNetwork=ilink2Org.DeleteIlinkNetwork,@6")
-#pragma comment(linker, "/EXPORT:DestroyNetworkManager=ilink2Org.DestroyNetworkManager,@7")
-#pragma comment(linker, "/EXPORT:DestroyNetworkManagerBridge=ilink2Org.DestroyNetworkManagerBridge,@8")
-#pragma comment(linker, "/EXPORT:DestroyNetworkManagerNoSTL=ilink2Org.DestroyNetworkManagerNoSTL,@9")
-#pragma comment(linker, "/EXPORT:DestroyTdiManager=ilink2Org.DestroyTdiManager,@10")
-#pragma comment(linker, "/EXPORT:GetContext=ilink2Org.GetContext,@11")
-#pragma comment(linker, "/EXPORT:GetContextBridge=ilink2Org.GetContextBridge,@12")
-#pragma comment(linker, "/EXPORT:GetContextNoSTL=ilink2Org.GetContextNoSTL,@13")
-#pragma comment(linker, "/EXPORT:GetIlinkDeviceInterface=ilink2Org.GetIlinkDeviceInterface,@14")
-#pragma comment(linker, "/EXPORT:GetIlinkXlogInterface=ilink2Org.GetIlinkXlogInterface,@15")
-#pragma comment(linker, "/EXPORT:GetLogManager=ilink2Org.GetLogManager,@16")
-#pragma comment(linker, "/EXPORT:GetLogManagerBridge=ilink2Org.GetLogManagerBridge,@17")
-#pragma comment(linker, "/EXPORT:GetLogManagerNoSTL=ilink2Org.GetLogManagerNoSTL,@18")
-#pragma comment(linker, "/EXPORT:__ASSERT=ilink2Org.__ASSERT,@19")
+//VEH + INT3断点
+static void* g_bpDelMsg = nullptr;
+static void* g_bpAdd2DB = nullptr;
 
-extern "C" uint64_t HijackLogic(uint64_t key_class);    //劫持逻辑
-extern "C" uint64_t g_imgbase = 0;                      //Weixin.dll的基址
-extern "C" uint64_t g_hook_offset = 0;                  //要hook的偏移
-extern "C" uint64_t g_delmsg_offset = 0;                //DeleteMessage函数的偏移 需要Patch为Nop
-extern "C" uint8_t* g_transfer_zone = 0;                //中转指令内存
+uint8_t thread_local g_last_org_srvid[8] = {0}; //真实的srvid 防止插入两条撤回提醒
+uint8_t thread_local g_anti_revoke_cur_msg = 0; //是否防撤回当前这条消息
 
+//配置信息
+struct BASICINFO
+{
+    uint64_t imgbase;           // Weixin.dll的基址
+	uint64_t add2db_offset;     // 将撤回消息添加到数据库的函数偏移
+	uint64_t delmsg_offset;     // 删除要撤回消息函数的偏移
+};
 
-uint64_t g_last_org_srvid = 0;                          //真实的srvid 防止插入两条撤回提醒
-std::vector<uint8_t> g_last_unique_id = {};             //上一次生成的
+struct DELMSGINFO
+{
+    int arg_msg_index;
+    int offset_wxid_first;
+    int offset_wxid_second;
+    int offset_wxid_third;
+};
 
-//配置信息 包括关键类中成员的偏移信息
+struct ADD2DBINFO
+{
+    int arg_msg_index;
+    int arg_bool_index;
+    int offset_srvid;
+    int offset_revoke_xml;
+};
+
 struct CONFIGINFO
 {
-    int srvid;
-    int revoke_msg;
-    int wxid_sender;
-    int wxid_receiver;
+	BASICINFO basic_info;
+	DELMSGINFO delmsg_info;
+	ADD2DBINFO add2db_info;
 }g_config_info;
 
 //std::string的内存布局
@@ -66,19 +63,16 @@ struct StdString
     int64_t capability;
 };
 
-struct OrgInfo
-{
-    uint64_t     addr;              //地址
-    size_t      org_size;           //原始机器码长度
-    uint8_t     org_opcodes[256];   //被HOOK之前原始的机器码
-};
-std::vector<OrgInfo> g_org_info;
+ini::IniFile g_config;      //ini配置
 
-ini::IniFile g_config; //ini配置
+bool g_anti_revoke_self_msg = false; //是否防止自己撤回消息
+bool g_output_debeug_msg = false; //是否输出调试信息
 
 void OutputDebugPrintf(const char* strOutputString, ...)
 {
 #define OUT_DEBUG_BUF_LEN   512
+    if (!g_output_debeug_msg) return;
+
     char strBuffer[OUT_DEBUG_BUF_LEN] = { 0 };
     va_list vlArgs;
     va_start(vlArgs, strOutputString);
@@ -174,212 +168,237 @@ std::vector<uint8_t> GetUniquePositiveValue()
 }
 
 /**
- * @brief 恢复HOOK写入的字节.
+ * @brief 读取配置信息.
  */
-void HookEnd()
+bool ReadExternalConfig(char* ini_path)
+{   
+    std::string ini_path_str = ini_path;
+
+    //判断ini文件是否存在
+    struct stat buffer;
+    if (stat(ini_path, &buffer) != 0) {
+        //从'文档'目录下读取配置文件
+        char user_profile[MAX_PATH] = { 0 };  // 获取环境变量 USERPROFILE
+        DWORD length = GetEnvironmentVariableA("USERPROFILE", user_profile, MAX_PATH);
+        if (length == 0) {
+            OutputDebugString(TEXT("[ReovkeHook] GetEnvVar USERPROFILE Failed!"));
+            return false;
+        }
+
+        // 拼接 Documents 目录
+        std::string documents_path = std::string(user_profile) + "\\Documents";
+        std::string ini_path_str = documents_path + "\\RevokeHook\\RevokeHook.ini";
+        if (stat(ini_path_str.c_str(), &buffer) != 0) {
+            OutputDebugString(TEXT("[ReovkeHook] Not Find ini file!"));
+            return false;
+        }
+    }
+
+    g_config.load(ini_path_str);
+
+    HMODULE weixin_dll_base = NULL;
+    //加载当前dll的时候 Weixin.dll很可能还没有被加载
+    for (int try_num = 0; try_num < 100; try_num++)
+    {   //多次尝试 一共尝试100次 每次间隔300毫秒 即30秒
+        weixin_dll_base = GetModuleHandle(_T("Weixin.dll"));
+        if (weixin_dll_base != NULL)
+            break;
+        Sleep(300);
+    }
+    if (weixin_dll_base == NULL) {
+        OutputDebugString(TEXT("[RevokeHook] Get Weixin.dll Base Failed!"));
+        return false;
+	}
+
+	g_config_info.basic_info.imgbase = (uint64_t)weixin_dll_base;
+	g_config_info.basic_info.delmsg_offset = g_config["KeyFunc"]["DelMsgOffset"].as<int>();
+	g_config_info.basic_info.add2db_offset = g_config["KeyFunc"]["Add2DBOffset"].as<int>();
+    
+	g_config_info.delmsg_info.arg_msg_index = g_config["DelMsg"]["ArgMsgIndex"].as<int>();
+	g_config_info.delmsg_info.offset_wxid_first = g_config["DelMsg"]["OffsetWxIDFirst"].as<int>();
+	g_config_info.delmsg_info.offset_wxid_second = g_config["DelMsg"]["OffsetWxIDSecond"].as<int>();
+	g_config_info.delmsg_info.offset_wxid_third = g_config["DelMsg"]["OffsetWxIDThird"].as<int>();
+
+	g_config_info.add2db_info.arg_msg_index = g_config["Add2DB"]["ArgMsgIndex"].as<int>();
+	g_config_info.add2db_info.arg_bool_index = g_config["Add2DB"]["ArgBoolIndex"].as<int>();
+	g_config_info.add2db_info.offset_revoke_xml = g_config["Add2DB"]["OffsetRevokeXML"].as<int>();
+	g_config_info.add2db_info.offset_srvid = g_config["Add2DB"]["OffsetSrvID"].as<int>();
+
+	g_anti_revoke_self_msg = g_config["Setting"]["AntiRevokeSelf"].as<bool>();
+	g_output_debeug_msg = g_config["Setting"]["OutputDebugMsg"].as<bool>();
+
+    OutputDebugPrintf("[RevokeHook] Use ini: %s", ini_path_str.c_str());
+    return true;
+}
+
+/**
+ * @brief 获取第index个参数的值.
+ * 
+ * @param ctx 上下文信息
+ * @param index 第几个参数, 从1开始
+ * @return 寄存器/栈上的值
+ */
+uint64_t GetArgValue(PCONTEXT ctx, int index)
 {
-    //写入原机器码
-    if (g_org_info.size() != 0) {
-        for (auto& org_info : g_org_info)
-        {
-            if (org_info.addr == 0) {
-                OutputDebugString(TEXT("[RevokeHook] Hook Addr is 0"));
-                continue;
+    uint64_t* stack_args;
+    if (ctx == NULL || index <= 0)
+    {
+        return 0;
+    }
+
+    switch (index)
+    {
+    case 1:
+        return ctx->Rcx;
+    case 2:
+        return ctx->Rdx;
+    case 3:
+        return ctx->R8;
+    case 4:
+        return ctx->R9;
+    default:
+        /*
+         * MSVC x64 调用约定:
+         * [RSP + 0x00] = shadow space slot 1
+         * [RSP + 0x08] = shadow space slot 2
+         * [RSP + 0x10] = shadow space slot 3
+         * [RSP + 0x18] = shadow space slot 4
+         * [RSP + 0x20] = 第5个参数
+         */
+        stack_args = (uint64_t*)(ctx->Rsp + 0x20);
+        return stack_args[index - 5];
+    }
+}
+
+int SetArgValue(PCONTEXT ctx, int index, uint64_t value)
+{
+    uint64_t* stack_args;
+
+    if (ctx == NULL || index <= 0)
+    {
+        return 0;
+    }
+
+    switch (index)
+    {
+    case 1:
+        ctx->Rcx = value;
+        return 1;
+    case 2:
+        ctx->Rdx = value;
+        return 1;
+    case 3:
+        ctx->R8 = value;
+        return 1;
+    case 4:
+        ctx->R9 = value;
+        return 1;
+    default:
+        stack_args = (uint64_t*)(ctx->Rsp + 0x20);
+        stack_args[index - 5] = value;
+        return 1;
+    }
+}
+
+static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
+{
+    uint64_t rip = ctx->Rip;
+  
+    if (rip == (uint64_t)g_bpDelMsg) 
+    {
+        uint64_t arg_msg = GetArgValue(ctx, g_config_info.delmsg_info.arg_msg_index);
+        StdString* wxid_first = (StdString*)(arg_msg + g_config_info.delmsg_info.offset_wxid_first);
+        StdString* wxid_second = (StdString*)(arg_msg + g_config_info.delmsg_info.offset_wxid_second);
+        if ((wxid_first->size > 0) && (wxid_second->size > 0)) {
+			char* wxid_first_str = (char*)(*((uint64_t*)(wxid_first->data_ptr)));
+			char* wxid_second_str = (char*)(*((uint64_t*)(wxid_second->data_ptr)));
+            
+            OutputDebugPrintf("[Debug] %p | wxid 1: %s", wxid_first, wxid_first_str);
+            OutputDebugPrintf("[Debug] %p | wxid 2: %s", wxid_second, wxid_second_str);
+
+			// 相等说明是自己撤回的消息, 不执行防撤回
+            if (!g_anti_revoke_self_msg && (strcmp(wxid_first_str, wxid_second_str) == 0)) {
+				g_anti_revoke_cur_msg = 0; //重置状态
             }
-            BOOL bRet = WriteProcessMemory(GetCurrentProcess(), (LPVOID)org_info.addr, org_info.org_opcodes, org_info.org_size, NULL);
-            if (bRet == NULL)
-                OutputDebugPrintf("[RevokeHook] Write Hook Org Bytes Failed! [%d]", GetLastError());
+            else {
+				g_anti_revoke_cur_msg = 1; //标记当前这条消息是需要防撤回的
+
+                ctx->Rip += 5; // 跳过call
+                OutputDebugPrintf("[Debug] Skip Call, New RIP: %p", ctx->Rip);
+            }
+        }
+        else {
+			OutputDebugPrintf("[Debug] WxID is empty!");
         }
     }
-    if (g_transfer_zone) {
-        if (!VirtualFree(g_transfer_zone, 0, MEM_RELEASE)) {
-            OutputDebugPrintf("[RevokeHook] Free Transfer Mem Failed! [%d]", GetLastError());
-            return;
+    else if (rip == (uint64_t)g_bpAdd2DB) 
+    {
+		if (g_anti_revoke_cur_msg == 0) return; //如果当前消息不需要防撤回 直接返回
+
+		int arg_bool_index = g_config_info.add2db_info.arg_bool_index;
+		uint64_t arg_bool = GetArgValue(ctx, arg_bool_index);
+		uint64_t arg_msg = GetArgValue(ctx, g_config_info.add2db_info.arg_msg_index);
+        StdString* revoke_xml = (StdString*)(arg_msg + g_config_info.add2db_info.offset_revoke_xml);
+        if (revoke_xml->size > 0) {
+            OutputDebugPrintf("[Debug] %p | Revoke XML: %s | bool: %d", revoke_xml, *((uint64_t*)(revoke_xml->data_ptr)), arg_bool);
+
+            if (SetArgValue(ctx, arg_bool_index, 1)) {
+				OutputDebugPrintf("[Debug] Set Arg %d to 1", arg_bool_index);
+            }
+            else {
+				OutputDebugPrintf("[Debug] Set Arg %d Failed!", arg_bool_index);
+            }
+
+			uint64_t mem_srvid_addr = arg_msg + g_config_info.add2db_info.offset_srvid;
+
+			uint8_t org_srvid[8] = { 0 };
+            memcpy(org_srvid, (void*)mem_srvid_addr, 8);//读取原SrvID
+            OutputDebugPrintf("[Debug] Org srvid: %p | Last srvid: %p", *((uint64_t*)org_srvid), *((uint64_t*)g_last_org_srvid));
+            if (memcmp(g_last_org_srvid, org_srvid, 8) == 0) {
+				return; //防止插入两条撤回提醒
+            }
+			memcpy(g_last_org_srvid, org_srvid, 8);//更新全局记录的最后一个srvid
+			OutputDebugPrintf("[Debug] Update last srvid: %p", *((uint64_t*)g_last_org_srvid));
+
+
+            //修改srvid为随机的
+            std::vector<uint8_t> rand_srvid = GetUniquePositiveValue();
+            if (rand_srvid.size() != 8) {
+                OutputDebugString(TEXT("[RevokeHook] GetUniquePositiveValue Err!"));
+                return;
+            }
+			OutputDebugPrintf("[Debug] Original SrvID: %p [%X %X...]", mem_srvid_addr, ((uint8_t*)mem_srvid_addr)[0], ((uint8_t*)mem_srvid_addr)[1]);
+
+        
+			memcpy((void*)mem_srvid_addr, rand_srvid.data(), rand_srvid.size());
+
+            //修改撤回提醒字符串 (构造成sysmsg的)
+            uint64_t revoke_xml_str_addr = *((uint64_t*)(revoke_xml->data_ptr));
+            uint8_t anchor[] = {0xe4, 0xb8, 0x80, 0xe6, 0x9d, 0xa1}; //'一条' utf-8
+            for (int i = 0; i <= revoke_xml->size - 6; i++) {
+
+				int equal_count = 0;
+                for (int j = 0; j < 6; j++) {
+                    if (((uint8_t*)revoke_xml_str_addr)[i + j] == anchor[j])
+                        equal_count++;
+                    else
+						break;
+                }
+                if (equal_count == 6) {
+                    uint8_t replace[] = {0xe5, 0xa6, 0x82, 0xe4, 0xb8, 0x8a}; //'如上' utf-8
+                    memcpy((void*)(revoke_xml_str_addr + i), replace, sizeof(replace));
+					OutputDebugPrintf("[Debug] Replace Revoke XML Success! | New XML: %s", (char*)revoke_xml_str_addr);
+                    break;
+                }            
+            }
         }
+        else {
+            OutputDebugPrintf("[Debug] Revoke XML is empty! | [%p, %p]", arg_msg, revoke_xml);
+        }
+    
     }
 }
 
-/**
- * @brief 劫持逻辑 修改KeyClass类的成员变量.
- * @param a3 即r8, 父函数的第三个参数(关键内存)
- * @return 返回值无用
- */
-uint64_t HijackLogic(uint64_t a3/*r8*/)
-{
-    int srvid_offset = g_config_info.srvid;
-    int revoke_msg_offset = g_config_info.revoke_msg;
-    uint64_t key_class = a3;
-
-    //修改srvid为随机的
-    std::vector<uint8_t> rand_srvid = GetUniquePositiveValue();
-    if (rand_srvid.size() != 8) {
-        OutputDebugString(TEXT("[RevokeHook] GetUniquePositiveValue Err!"));
-        return 0;
-    }
-
-    uint64_t mem_srvid_addr = key_class + srvid_offset, org_srvid = 0;
-    ReadProcessMemory(GetCurrentProcess(), (LPCVOID)mem_srvid_addr, &org_srvid, 8, NULL); //读取原SrvID
-    if (g_last_org_srvid == org_srvid) {
-        rand_srvid = g_last_unique_id;
-    }
-    else {
-        g_last_unique_id = rand_srvid;
-        g_last_org_srvid = org_srvid;//更新
-    }
-
-    BOOL bRet = WriteProcessMemory(GetCurrentProcess(), (LPVOID)mem_srvid_addr , rand_srvid.data(), rand_srvid.size(), NULL);
-    if (bRet == NULL)
-    {
-        OutputDebugPrintf("[RevokeHook] Hijack Write SrvID Bytes Failed! [%d]", GetLastError());
-        return 0;
-    }
-
-    //修改撤回提醒字符串 (构造成sysmsg的)
-    uint64_t mem_revoke_msg_str_addr = key_class + revoke_msg_offset;
-    StdString* mem_revoke_msg_str = (StdString*)mem_revoke_msg_str_addr;
-    uint64_t revoke_msg_addr = mem_revoke_msg_str_addr;
-    if (mem_revoke_msg_str->capability >= 0x10) {//大于16个字节的另申请内存
-        revoke_msg_addr = *((uint64_t*)revoke_msg_addr);
-    }
-    std::vector<uint8_t> revoke_msg_utf8(mem_revoke_msg_str->size);//读取原撤回提醒字符串的数据
-    ReadProcessMemory(GetCurrentProcess(), (LPCVOID)revoke_msg_addr, revoke_msg_utf8.data(), mem_revoke_msg_str->size, NULL);
-
-    size_t anchor_pos = -1; //'一条'的位置 将其修改为'如上'
-    std::vector<uint8_t> anchor = { 0xe4, 0xb8, 0x80, 0xe6, 0x9d, 0xa1 }; //'一条' utf-8
-    auto it = std::search(revoke_msg_utf8.begin(), revoke_msg_utf8.end(), anchor.begin(), anchor.end());
-    if (it != revoke_msg_utf8.end()) {
-        anchor_pos = std::distance(revoke_msg_utf8.begin(), it);
-    }
-    if (anchor_pos == -1) {
-        OutputDebugPrintf("[RevokeHook] Hijack Get Revoke Msg Pos Failed! [%d]", GetLastError());
-        return 0;
-    }
-    std::vector<uint8_t> replace = { 0xe5, 0xa6, 0x82, 0xe4, 0xb8, 0x8a }; //'如上' utf-8
-    WriteProcessMemory(GetCurrentProcess(), (LPVOID)(revoke_msg_addr + anchor_pos), replace.data(), replace.size(), NULL);
-    return 0;
-}
-
-/**
- * @brief Hook逻辑 执行完HijackLogic后再执行原逻辑.
- * @param hModule 当前dll的句柄
- */
-void HookStart(HMODULE hModule)
-{
-    HMODULE weixin_dll_base = GetModuleHandle(_T("Weixin.dll"));
-    if (weixin_dll_base == NULL)
-    {
-        OutputDebugPrintf("[RevokeHook] Get Weixin.dll's ImgBase Failed! [%d]", GetLastError());
-        return;
-    }
-    g_imgbase = (uint64_t)weixin_dll_base;
-
-    //更改Hook逻辑: 1. 先Patch DeleteMsg函数为Nop 2. 修改CoAddMessageToDB最后一个参数为True(1) 3. 再在插入到数据库之前修改srvid
-    //要劫持的这个地方是在call CoAddMessageToDB指令之前
-    //前三条指令共12个字节, 且不涉及重定位操作, 所以HOOK逻辑是把这些指令改为mov rax, HijackLogicWarpper; + jmp rax;
-    //然后执行完HijackLogic后, jmp 中转区; 在这块内存里执行原先三条汇编指令(最后一条指令改为mov *, 1) + jmp next_insn;
-    //即|jmp hijack| -> |hijack_logic + jmp transfer_zone| -> |org_logic + jmp org_next_insn| -> |...|
-
-    //Patch Call DeleteMessage -> Nops
-    uint64_t delmsg_addr = g_imgbase + g_delmsg_offset;
-    uint8_t patch_opcode[] = { 0x90, 0x90, 0x90, 0x90, 0x90 };  //call占5个字节
-    size_t patch_size = sizeof(patch_opcode); //5个字节
-   
-    OrgInfo delmsg_org_info;// 记录原始字节信息
-    delmsg_org_info.addr = delmsg_addr;         //记录地址   
-    delmsg_org_info.org_size = patch_size;      //记录要写多少个字节
-    BOOL bRet = ReadProcessMemory(GetCurrentProcess(), (LPCVOID)delmsg_addr, delmsg_org_info.org_opcodes, patch_size, NULL);
-    if (bRet == NULL)
-    {
-        OutputDebugPrintf("[RevokeHook] Read Patch Org Bytes Failed! [%d]", GetLastError());
-        return;
-    }
-    g_org_info.push_back(delmsg_org_info); //记录
-
-    bRet = WriteProcessMemory(GetCurrentProcess(), (LPVOID)delmsg_addr, patch_opcode, patch_size, NULL);
-    if (bRet == NULL)
-    {
-        OutputDebugPrintf("[RevokeHook] Write Patch Nop Bytes Failed! [%d]", GetLastError());
-        return;
-    }
-
-    //读取Hook点原机器码
-    uint64_t hook_addr = g_imgbase + g_hook_offset;//rax没用
-    uint8_t hook_opcode[] = {/*mov rax, 地址*/0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /*jmp rax*/0xFF, 0xE0 };
-    size_t hook_size = sizeof(hook_opcode); //12个字节
-
-    OrgInfo hook_org_info;// 记录原始字节信息
-    hook_org_info.addr = hook_addr;         //记录地址
-    hook_org_info.org_size = hook_size;     //记录要写多少个字节
-    bRet = ReadProcessMemory(GetCurrentProcess(), (LPCVOID)hook_addr, hook_org_info.org_opcodes, hook_size, NULL);
-    if (bRet == NULL)
-    {
-        OutputDebugPrintf("[RevokeHook] Read Hook Org Bytes Failed! [%d]", GetLastError());
-        return;
-    }
-    g_org_info.push_back(hook_org_info); //记录
-
-    //构造中转区机器码 原指令 + jmp far
-    size_t org_insns_len = 12;  //暂时先写死
-    g_transfer_zone = (uint8_t*)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!g_transfer_zone) {
-        OutputDebugPrintf("[RevokeHook] Alloc Transfer Mem Failed! [%d]", GetLastError());
-        return;
-    }
-
-    bRet = ReadProcessMemory(GetCurrentProcess(), (LPCVOID)hook_addr, g_transfer_zone, org_insns_len, NULL);
-    if (bRet == NULL)
-    {
-        OutputDebugPrintf("[RevokeHook] Read Transfer Zone Org Bytes Failed! [%d]", GetLastError());
-        return;
-    }
-    //修改mov [rsp+38h+a5], 0为mov [rsp+38h+a5], 1
-    g_transfer_zone[org_insns_len - 1] = 1;         //CoAddMessageToDB最后一个参数 这个参数应该是控制着是否可以插入新local_id
-
-    uint8_t jmp_org_opcode[] = {0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xE0};
-    uint64_t next_insn_addr = hook_addr + org_insns_len;
-    for (size_t i = 0; i < sizeof(uint64_t); i++) //跳回去
-        jmp_org_opcode[i + 2] = *((uint8_t*)(&next_insn_addr) + i);
-    memcpy(g_transfer_zone + org_insns_len, jmp_org_opcode, sizeof(jmp_org_opcode));
-   
-    //写入劫持机器码 跳转到HijackLogicWarpper函数处
-    uint64_t hijacklogic_addr = (uint64_t)(&HijackLogicWarpper);
-    for (size_t i = 0; i < sizeof(uint64_t); i++)
-    {
-        hook_opcode[i + 2] = *((uint8_t*)(&hijacklogic_addr) + i);
-    }
-    bRet = WriteProcessMemory(GetCurrentProcess(), (LPVOID)hook_addr, hook_opcode, hook_size, NULL);
-    if (bRet == NULL)
-    {
-        OutputDebugPrintf("[RevokeHook] Write Hook Bytes Failed! [%d]", GetLastError());
-        return;
-    }
-}
-
-/**
- * @brief 从运行目录下的RevokeHook.ini读取配置.
- */
-void ReadExternalConfig()
-{
-    // 设置工作目录为当前运行目录
-    char sBuf[MAX_PATH], *ptr;
-    if (GetModuleFileNameA(NULL, sBuf, sizeof(sBuf)))
-    {
-        ptr = strrchr(sBuf, '\\');
-        if (ptr)
-            *ptr = '\0';
-        SetCurrentDirectoryA(sBuf);
-    }
-    OutputDebugPrintf("[RevokeHook] Current Dir: %s", sBuf);
-
-    g_config.load("RevokeHook.ini");
-    g_hook_offset = g_config["Hook"]["Offset"].as<int>();
-    g_delmsg_offset = g_config["Hook"]["DelMsg"].as<int>();
-    g_config_info.srvid = g_config["Class"]["SrvID"].as<int>();
-    g_config_info.revoke_msg = g_config["Class"]["RevokeMsg"].as<int>();
-    g_config_info.wxid_sender = g_config["Class"]["WxIDS"].as<int>();
-    g_config_info.wxid_receiver = g_config["Class"]["WxIDR"].as<int>();
-    OutputDebugPrintf("[RevokeHook] Use Offset: 0x%llX...", g_hook_offset);
-}
 
 BOOL APIENTRY DllMain( HMODULE hModule,
                        DWORD  ul_reason_for_call,
@@ -389,19 +408,34 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     switch (ul_reason_for_call)
     {
     case DLL_PROCESS_ATTACH:
-        DisableThreadLibraryCalls(hModule); //防止多次调用
-        //不知道为什么不会自动加载ilink2Org.dll 直接手动加载
-        OutputDebugPrintf("[RevokeHook] Load ilink2Org.dll: 0x%llX...", LoadLibrary(TEXT("ilink2Org.dll")));
-        OutputDebugString(TEXT("[RevokeHook] Reading Config [RevokeHook.ini]..."));
-        ReadExternalConfig();
-        OutputDebugString(TEXT("[RevokeHook] Begin Hook and Hijack!"));
-        HookStart(hModule);
+        OutputDebugString(TEXT("[RevokeHook] Reading Config..."));
+        if (!ReadExternalConfig((char*)lpReserved)) break;   //ini路径通过第三个参数传进来
+        OutputDebugString(TEXT("[RevokeHook] Begin Install VEH & Set Bp!"));
+
+        if (!VehBp_Init(TRUE))
+        {
+            OutputDebugString(_T("[RevokeHook] VEHBp Init failed!"));
+            return TRUE;
+        }
+
+		g_bpDelMsg = (void*)(g_config_info.basic_info.imgbase + g_config_info.basic_info.delmsg_offset);
+		g_bpAdd2DB = (void*)(g_config_info.basic_info.imgbase + g_config_info.basic_info.add2db_offset);
+
+        if (VehBp_Set(g_bpDelMsg, OnTargetHit) == -1)
+            OutputDebugPrintf("[RevokeHook] AddBp %p Error", g_bpDelMsg);
+        else
+            OutputDebugPrintf("[RevokeHook] AddBp %p OK", g_bpDelMsg);
+        
+        if (VehBp_Set(g_bpAdd2DB, OnTargetHit) == -1)
+            OutputDebugPrintf("[RevokeHook] AddBp %p Error", g_bpAdd2DB);
+        else
+            OutputDebugPrintf("[RevokeHook] AddBp %p OK", g_bpAdd2DB);
         break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
-        OutputDebugString(TEXT("[RevokeHook] Restore Hook Bytes!"));
-        HookEnd();
+        OutputDebugString(TEXT("[RevokeHook] Uninstall VEH & Cancel Bp!"));
+        VehBp_Uninit();
         break;
     }
     return TRUE;
