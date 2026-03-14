@@ -1,0 +1,38 @@
+{
+  "general": {
+    "4.1.7.59": {
+      "sig1": "48 8D 55 ?? 45 31 C0 E8 ?? ?? ?? ?? 90 48 8B 9D ?? ?? ?? ?? 48 85 DB 74 ?? F0 FF 4B 08",
+      "sig2": "48 83 EC ?? 4C ?? ?? 48 ?? ?? C6 44 24 ?? 00 4D ?? ?? 49 ?? ?? E8 ?? ?? ?? ?? 48 ?? ?? 48 83 C4 ??",
+      "sig1_delta": "0x7",
+      "sig2_delta": "0x15",
+      "sig1_arg_msg_index": "0x2",
+      "sig1_offset_wxid_first": "0x18",
+      "sig1_offset_wxid_second": "0x38",
+      "sig1_offset_wxid_third": "0x58",
+      "sig2_arg_msg_index": "0x3",
+      "sig2_arg_bool_index": "0x5",
+      "sig2_offset_revoke_xml": "0x180",
+      "sig2_offset_srvid": "0x108"
+    }
+  },
+  "specific": {
+    "4.1.7.59": {
+      "KeyFunc": {
+        "DelMsgOffset": "0x211B79E",
+        "Add2DBOffset": "0x32DE4C6"
+      },
+      "DelMsg": {
+        "ArgMsgIndex": "0x2",
+        "OffsetWxIDFirst": "0x18",
+        "OffsetWxIDSecond": "0x38",
+        "OffsetWxIDThird": "0x58"
+      },
+      "Add2DB": {
+        "ArgMsgIndex": "0x3",
+        "ArgBoolIndex": "0x5",
+        "OffsetRevokeXML": "0x180",
+        "OffsetSrvID": "0x108"
+      }
+    }
+  }
+}
