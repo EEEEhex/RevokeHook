@@ -20,18 +20,12 @@
       "KeyFunc": {
         "DelMsgOffset": "0x211B79E",
         "Add2DBOffset": "0x32DE4C6"
-      },
-      "DelMsg": {
-        "ArgMsgIndex": "0x2",
-        "OffsetWxIDFirst": "0x18",
-        "OffsetWxIDSecond": "0x38",
-        "OffsetWxIDThird": "0x58"
-      },
-      "Add2DB": {
-        "ArgMsgIndex": "0x3",
-        "ArgBoolIndex": "0x5",
-        "OffsetRevokeXML": "0x180",
-        "OffsetSrvID": "0x108"
+      }
+    },
+    "4.1.8.28": {
+      "KeyFunc": {
+        "DelMsgOffset": "0x215F6EE",
+        "Add2DBOffset": "0x331FCD6"
       }
     }
   }
