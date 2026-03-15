@@ -401,7 +401,7 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader(LPVOID lpParameter)
 	{
 		ULONG_PTR sigAddressBegin = 0, sigAddressEnd = 0;
 		ULONG_PTR myBaseAddress = uiDllAddress[i];	//当前PE起始地址
-		for (SIZE_T j = 0x4000; j < 0xB000; j++)	//不可能超过这么多
+		for (SIZE_T j = 0x4000; j < 0xF000; j++)	//不可能超过这么多
 		{
 			BYTE* cur = (BYTE*)(myBaseAddress + j);
 			if ((*cur == 0x5B) && (*(cur+1) == 0xBC) && (*(cur+2) == 0x4A) && (*(cur+3)==0x6A)) { //KERNEL32DLL_HASH
@@ -409,6 +409,8 @@ DLLEXPORT ULONG_PTR WINAPI ReflectiveLoader(LPVOID lpParameter)
 				break;
 			}
 		}
+		if (sigAddressBegin == 0) break; //没有找到, 不再抹除
+
 		for (SIZE_T j = 0x100; j < 0x800; j++)
 		{
 			BYTE* cur = (BYTE*)(sigAddressBegin + j);
