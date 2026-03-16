@@ -21,8 +21,68 @@
 static void* g_bpDelMsg = nullptr;
 static void* g_bpAdd2DB = nullptr;
 
-uint8_t thread_local g_last_org_srvid[8] = {0}; //真实的srvid 防止插入两条撤回提醒
-uint8_t thread_local g_anti_revoke_cur_msg = 0; //是否防撤回当前这条消息
+static DWORD g_tlsThreadState = TLS_OUT_OF_INDEXES;
+struct ThreadState
+{
+    uint8_t last_org_srvid[8];      //真实的srvid 防止插入两条撤回提醒
+    uint8_t anti_revoke_cur_msg;    //是否防撤回当前这条消息
+};
+
+static ThreadState* GetThreadState()
+{
+    if (g_tlsThreadState == TLS_OUT_OF_INDEXES)
+        return nullptr;
+
+    ThreadState* state = reinterpret_cast<ThreadState*>(TlsGetValue(g_tlsThreadState));
+    if (state != nullptr)
+        return state;
+
+    state = reinterpret_cast<ThreadState*>(
+        HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ThreadState)));
+    if (state == nullptr)
+        return nullptr;
+
+    if (!TlsSetValue(g_tlsThreadState, state))
+    {
+        HeapFree(GetProcessHeap(), 0, state);
+        return nullptr;
+    }
+
+    return state;
+}
+
+static void FreeCurrentThreadState()
+{
+    if (g_tlsThreadState == TLS_OUT_OF_INDEXES)
+        return;
+
+    ThreadState* state = reinterpret_cast<ThreadState*>(TlsGetValue(g_tlsThreadState));
+    if (state != nullptr)
+    {
+        HeapFree(GetProcessHeap(), 0, state);
+        TlsSetValue(g_tlsThreadState, nullptr);
+    }
+}
+
+static bool InitThreadStateTls()
+{
+    if (g_tlsThreadState != TLS_OUT_OF_INDEXES)
+        return true;
+
+    g_tlsThreadState = TlsAlloc();
+    return g_tlsThreadState != TLS_OUT_OF_INDEXES;
+}
+
+static void UninitThreadStateTls()
+{
+    FreeCurrentThreadState();
+
+    if (g_tlsThreadState != TLS_OUT_OF_INDEXES)
+    {
+        TlsFree(g_tlsThreadState);
+        g_tlsThreadState = TLS_OUT_OF_INDEXES;
+    }
+}
 
 //配置信息
 struct BASICINFO
@@ -303,6 +363,11 @@ int SetArgValue(PCONTEXT ctx, int index, uint64_t value)
 static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
 {
     uint64_t rip = ctx->Rip;
+    ThreadState* thread_state = GetThreadState();
+    if (thread_state == nullptr) {
+        OutputDebugString(TEXT("[RevokeHook] GetThreadState Failed!"));
+        return;
+    }
   
     if (rip == (uint64_t)g_bpDelMsg) 
     {
@@ -318,10 +383,10 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
 
 			// 相等说明是自己撤回的消息, 不执行防撤回
             if (!g_anti_revoke_self_msg && (strcmp(wxid_first_str, wxid_second_str) == 0)) {
-				g_anti_revoke_cur_msg = 0; //重置状态
+                thread_state->anti_revoke_cur_msg = 0; //重置状态
             }
             else {
-				g_anti_revoke_cur_msg = 1; //标记当前这条消息是需要防撤回的
+                thread_state->anti_revoke_cur_msg = 1; //标记当前这条消息是需要防撤回的
 
                 ctx->Rip += 5; // 跳过call
                 OutputDebugPrintf("[Debug] Skip Call, New RIP: %p", ctx->Rip);
@@ -333,7 +398,7 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
     }
     else if (rip == (uint64_t)g_bpAdd2DB) 
     {
-		if (g_anti_revoke_cur_msg == 0) return; //如果当前消息不需要防撤回 直接返回
+		if (thread_state->anti_revoke_cur_msg == 0) return; //如果当前消息不需要防撤回 直接返回
 
 		int arg_bool_index = g_config_info.add2db_info.arg_bool_index;
 		uint64_t arg_bool = GetArgValue(ctx, arg_bool_index);
@@ -353,12 +418,12 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
 
 			uint8_t org_srvid[8] = { 0 };
             memcpy(org_srvid, (void*)mem_srvid_addr, 8);//读取原SrvID
-            OutputDebugPrintf("[Debug] Org srvid: %p | Last srvid: %p", *((uint64_t*)org_srvid), *((uint64_t*)g_last_org_srvid));
-            if (memcmp(g_last_org_srvid, org_srvid, 8) == 0) {
+            OutputDebugPrintf("[Debug] Org srvid: %p | Last srvid: %p", *((uint64_t*)org_srvid), *((uint64_t*)thread_state->last_org_srvid));
+            if (memcmp(thread_state->last_org_srvid, org_srvid, 8) == 0) {
 				return; //防止插入两条撤回提醒
             }
-			memcpy(g_last_org_srvid, org_srvid, 8);//更新全局记录的最后一个srvid
-			OutputDebugPrintf("[Debug] Update last srvid: %p", *((uint64_t*)g_last_org_srvid));
+			memcpy(thread_state->last_org_srvid, org_srvid, 8);//更新全局记录的最后一个srvid
+			OutputDebugPrintf("[Debug] Update last srvid: %p", *((uint64_t*)thread_state->last_org_srvid));
 
 
             //修改srvid为随机的
@@ -408,6 +473,11 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     switch (ul_reason_for_call)
     {
     case DLL_PROCESS_ATTACH:
+        if (!InitThreadStateTls()) {
+            OutputDebugString(TEXT("[RevokeHook] InitThreadStateTls Failed!"));
+            break;
+        }
+
         OutputDebugString(TEXT("[RevokeHook] Reading Config..."));
         if (!ReadExternalConfig((char*)lpReserved)) break;   //ini路径通过第三个参数传进来
         OutputDebugString(TEXT("[RevokeHook] Begin Install VEH & Set Bp!"));
@@ -433,9 +503,12 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
+        break;
     case DLL_PROCESS_DETACH:
         OutputDebugString(TEXT("[RevokeHook] Uninstall VEH & Cancel Bp!"));
         VehBp_Uninit();
+        FreeCurrentThreadState();
+        UninitThreadStateTls();
         break;
     }
     return TRUE;
