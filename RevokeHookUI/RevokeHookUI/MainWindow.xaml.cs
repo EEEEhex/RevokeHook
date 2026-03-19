@@ -33,7 +33,7 @@ public partial class MainWindow
     {
         EnsureLocalFiles();
 
-        AppendLog("程序启动。");
+        AppendLog("程序启动 v4.1.0。");
         AppendLog("INI 路径: " + _iniPath);
         AppendLog("Config2 路径: " + _config2Path);
 
@@ -341,9 +341,7 @@ public partial class MainWindow
     private void ApplyGeneralArgsToUi(Config2GeneralEntry generalEntry)
     {
         DelMsgArgMsgIndexTextBox.Text = generalEntry.Sig1ArgMsgIndex ?? DelMsgArgMsgIndexTextBox.Text;
-        DelMsgOffsetWxIDFirstTextBox.Text = generalEntry.Sig1OffsetWxIDFirst ?? DelMsgOffsetWxIDFirstTextBox.Text;
-        DelMsgOffsetWxIDSecondTextBox.Text = generalEntry.Sig1OffsetWxIDSecond ?? DelMsgOffsetWxIDSecondTextBox.Text;
-        DelMsgOffsetWxIDThirdTextBox.Text = generalEntry.Sig1OffsetWxIDThird ?? DelMsgOffsetWxIDThirdTextBox.Text;
+        DelMsgOffsetRevokeXmlTextBox.Text = generalEntry.Sig1OffsetRevokeXml ?? DelMsgOffsetRevokeXmlTextBox.Text;
 
         Add2DBArgMsgIndexTextBox.Text = generalEntry.Sig2ArgMsgIndex ?? Add2DBArgMsgIndexTextBox.Text;
         Add2DBArgBoolIndexTextBox.Text = generalEntry.Sig2ArgBoolIndex ?? Add2DBArgBoolIndexTextBox.Text;
@@ -362,9 +360,7 @@ public partial class MainWindow
         if (specificEntry.DelMsg is not null)
         {
             DelMsgArgMsgIndexTextBox.Text = specificEntry.DelMsg.ArgMsgIndex ?? DelMsgArgMsgIndexTextBox.Text;
-            DelMsgOffsetWxIDFirstTextBox.Text = specificEntry.DelMsg.OffsetWxIDFirst ?? DelMsgOffsetWxIDFirstTextBox.Text;
-            DelMsgOffsetWxIDSecondTextBox.Text = specificEntry.DelMsg.OffsetWxIDSecond ?? DelMsgOffsetWxIDSecondTextBox.Text;
-            DelMsgOffsetWxIDThirdTextBox.Text = specificEntry.DelMsg.OffsetWxIDThird ?? DelMsgOffsetWxIDThirdTextBox.Text;
+            DelMsgOffsetRevokeXmlTextBox.Text = specificEntry.DelMsg.OffsetRevokeXml ?? DelMsgOffsetRevokeXmlTextBox.Text;
         }
 
         if (specificEntry.Add2DB is not null)
@@ -469,9 +465,7 @@ public partial class MainWindow
         KeyFuncAdd2DBOffsetTextBox.Text = NumericParser.FormatCompact(config.KeyFunc.Add2DBOffset);
 
         DelMsgArgMsgIndexTextBox.Text = NumericParser.FormatCompact(config.DelMsg.ArgMsgIndex);
-        DelMsgOffsetWxIDFirstTextBox.Text = NumericParser.FormatCompact(config.DelMsg.OffsetWxIDFirst);
-        DelMsgOffsetWxIDSecondTextBox.Text = NumericParser.FormatCompact(config.DelMsg.OffsetWxIDSecond);
-        DelMsgOffsetWxIDThirdTextBox.Text = NumericParser.FormatCompact(config.DelMsg.OffsetWxIDThird);
+        DelMsgOffsetRevokeXmlTextBox.Text = NumericParser.FormatCompact(config.DelMsg.OffsetRevokeXML);
 
         Add2DBArgMsgIndexTextBox.Text = NumericParser.FormatCompact(config.Add2DB.ArgMsgIndex);
         Add2DBArgBoolIndexTextBox.Text = NumericParser.FormatCompact(config.Add2DB.ArgBoolIndex);
@@ -496,9 +490,7 @@ public partial class MainWindow
             DelMsg = new DelMsgSection
             {
                 ArgMsgIndex = NumericParser.ParseInt(DelMsgArgMsgIndexTextBox.Text),
-                OffsetWxIDFirst = NumericParser.ParseInt(DelMsgOffsetWxIDFirstTextBox.Text),
-                OffsetWxIDSecond = NumericParser.ParseInt(DelMsgOffsetWxIDSecondTextBox.Text),
-                OffsetWxIDThird = NumericParser.ParseInt(DelMsgOffsetWxIDThirdTextBox.Text)
+                OffsetRevokeXML = NumericParser.ParseInt(DelMsgOffsetRevokeXmlTextBox.Text)
             },
             Add2DB = new Add2DbSection
             {

@@ -28,14 +28,8 @@ public sealed class Config2GeneralEntry
     [JsonPropertyName("sig1_arg_msg_index")]
     public string? Sig1ArgMsgIndex { get; set; }
 
-    [JsonPropertyName("sig1_offset_wxid_first")]
-    public string? Sig1OffsetWxIDFirst { get; set; }
-
-    [JsonPropertyName("sig1_offset_wxid_second")]
-    public string? Sig1OffsetWxIDSecond { get; set; }
-
-    [JsonPropertyName("sig1_offset_wxid_third")]
-    public string? Sig1OffsetWxIDThird { get; set; }
+    [JsonPropertyName("sig1_offset_revoke_xml")]
+    public string? Sig1OffsetRevokeXml { get; set; }
 
     [JsonPropertyName("sig2_arg_msg_index")]
     public string? Sig2ArgMsgIndex { get; set; }
@@ -79,14 +73,8 @@ public sealed class Config2DelMsgEntry
     [JsonPropertyName("ArgMsgIndex")]
     public string? ArgMsgIndex { get; set; }
 
-    [JsonPropertyName("OffsetWxIDFirst")]
-    public string? OffsetWxIDFirst { get; set; }
-
-    [JsonPropertyName("OffsetWxIDSecond")]
-    public string? OffsetWxIDSecond { get; set; }
-
-    [JsonPropertyName("OffsetWxIDThird")]
-    public string? OffsetWxIDThird { get; set; }
+    [JsonPropertyName("OffsetRevokeXML")]
+    public string? OffsetRevokeXml { get; set; }
 }
 
 public sealed class Config2Add2DbEntry

@@ -54,9 +54,7 @@ public static class IniService
 
         builder.AppendLine("[DelMsg]");
         builder.AppendLine($"ArgMsgIndex={config.DelMsg.ArgMsgIndex}");
-        builder.AppendLine($"OffsetWxIDFirst={config.DelMsg.OffsetWxIDFirst}");
-        builder.AppendLine($"OffsetWxIDSecond={config.DelMsg.OffsetWxIDSecond}");
-        builder.AppendLine($"OffsetWxIDThird={config.DelMsg.OffsetWxIDThird}");
+        builder.AppendLine($"OffsetRevokeXML={config.DelMsg.OffsetRevokeXML}");
         builder.AppendLine();
 
         builder.AppendLine("[Add2DB]");
@@ -97,17 +95,9 @@ public static class IniService
                 {
                     config.DelMsg.ArgMsgIndex = NumericParser.ParseInt(value);
                 }
-                else if (key == "OffsetWxIDFirst")
+                else if (key == "OffsetRevokeXML")
                 {
-                    config.DelMsg.OffsetWxIDFirst = NumericParser.ParseInt(value);
-                }
-                else if (key == "OffsetWxIDSecond")
-                {
-                    config.DelMsg.OffsetWxIDSecond = NumericParser.ParseInt(value);
-                }
-                else if (key == "OffsetWxIDThird")
-                {
-                    config.DelMsg.OffsetWxIDThird = NumericParser.ParseInt(value);
+                    config.DelMsg.OffsetRevokeXML = NumericParser.ParseInt(value);
                 }
 
                 break;

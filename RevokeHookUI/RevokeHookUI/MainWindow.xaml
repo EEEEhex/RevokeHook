@@ -315,8 +315,6 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="12"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="10"/>
-                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
@@ -357,50 +355,10 @@
                             <TextBlock Grid.Column="0"
                                        VerticalAlignment="Center"
                                        Margin="0,0,8,0"
-                                       Text="第一个WxID偏移"/>
+                                       Text="RevokeXML偏移"/>
 
                             <TextBox Grid.Column="1"
-                                     x:Name="DelMsgOffsetWxIDFirstTextBox"
-                                     MinWidth="60"/>
-                        </Grid>
-                    </Grid>
-
-                    <Grid Grid.Row="4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <Grid Grid.Column="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="第二个WxID偏移"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="DelMsgOffsetWxIDSecondTextBox"
-                                     MinWidth="60"/>
-                        </Grid>
-
-                        <Grid Grid.Column="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="第三个WxID偏移"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="DelMsgOffsetWxIDThirdTextBox"
+                                     x:Name="DelMsgOffsetRevokeXmlTextBox"
                                      MinWidth="60"/>
                         </Grid>
                     </Grid>

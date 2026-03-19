@@ -95,9 +95,7 @@ struct BASICINFO
 struct DELMSGINFO
 {
     int arg_msg_index;
-    int offset_wxid_first;
-    int offset_wxid_second;
-    int offset_wxid_third;
+    int offset_revoke_xml;
 };
 
 struct ADD2DBINFO
@@ -275,9 +273,7 @@ bool ReadExternalConfig(char* ini_path)
 	g_config_info.basic_info.add2db_offset = g_config["KeyFunc"]["Add2DBOffset"].as<int>();
     
 	g_config_info.delmsg_info.arg_msg_index = g_config["DelMsg"]["ArgMsgIndex"].as<int>();
-	g_config_info.delmsg_info.offset_wxid_first = g_config["DelMsg"]["OffsetWxIDFirst"].as<int>();
-	g_config_info.delmsg_info.offset_wxid_second = g_config["DelMsg"]["OffsetWxIDSecond"].as<int>();
-	g_config_info.delmsg_info.offset_wxid_third = g_config["DelMsg"]["OffsetWxIDThird"].as<int>();
+	g_config_info.delmsg_info.offset_revoke_xml = g_config["DelMsg"]["OffsetRevokeXML"].as<int>();
 
 	g_config_info.add2db_info.arg_msg_index = g_config["Add2DB"]["ArgMsgIndex"].as<int>();
 	g_config_info.add2db_info.arg_bool_index = g_config["Add2DB"]["ArgBoolIndex"].as<int>();
@@ -372,58 +368,57 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
     if (rip == (uint64_t)g_bpDelMsg) 
     {
         uint64_t arg_msg = GetArgValue(ctx, g_config_info.delmsg_info.arg_msg_index);
-        StdString* wxid_first = (StdString*)(arg_msg + g_config_info.delmsg_info.offset_wxid_first);
-        StdString* wxid_second = (StdString*)(arg_msg + g_config_info.delmsg_info.offset_wxid_second);
-        if ((wxid_first->size > 0) && (wxid_second->size > 0)) {
-			char* wxid_first_str = (char*)(*((uint64_t*)(wxid_first->data_ptr)));
-			char* wxid_second_str = (char*)(*((uint64_t*)(wxid_second->data_ptr)));
-            
-            OutputDebugPrintf("[Debug] %p | wxid 1: %s", wxid_first, wxid_first_str);
-            OutputDebugPrintf("[Debug] %p | wxid 2: %s", wxid_second, wxid_second_str);
-
-			// 相等说明是自己撤回的消息, 不执行防撤回
-            if (!g_anti_revoke_self_msg && (strcmp(wxid_first_str, wxid_second_str) == 0)) {
-                thread_state->anti_revoke_cur_msg = 0; //重置状态
+        StdString* revoke_xml = (StdString*)(arg_msg + g_config_info.delmsg_info.offset_revoke_xml);
+        if (revoke_xml->size > 0) {
+            uint64_t revoke_xml_str_addr = *((uint64_t*)(revoke_xml->data_ptr));
+            // OutputDebugPrintf("[Debug] %p | Revoke XML: %s", revoke_xml, revoke_xml_str_addr);
+            uint8_t self_revoke_sig[] = { 0xe4, 0xbd, 0xa0, 0xe6, 0x92, 0xa4, 0xe5, 0x9b, 0x9e }; //'你撤回' utf-8
+            for (int i = 0; i <= revoke_xml->size - sizeof(self_revoke_sig); i++) {
+                int equal_count = 0;
+                for (int j = 0; j < sizeof(self_revoke_sig); j++) {
+                    if (((uint8_t*)revoke_xml_str_addr)[i + j] == self_revoke_sig[j])
+                        equal_count++;
+                    else
+                        break;
+                }
+                if (equal_count == sizeof(self_revoke_sig)) { 
+                    if (!g_anti_revoke_self_msg) {
+                        thread_state->anti_revoke_cur_msg = 0; //重置状态
+                        return;
+                    }
+                    OutputDebugPrintf("[Debug] Anti Revoke SELF Msg...");
+                }
             }
-            else {
-                thread_state->anti_revoke_cur_msg = 1; //标记当前这条消息是需要防撤回的
 
-                ctx->Rip += 5; // 跳过call
-                OutputDebugPrintf("[Debug] Skip Call, New RIP: %p", ctx->Rip);
-            }
+            thread_state->anti_revoke_cur_msg = 1; //标记当前这条消息是需要防撤回的
+            ctx->Rip += 5; // 跳过call
+            OutputDebugPrintf("[Debug] Skip Call, New RIP: %p", ctx->Rip);
         }
         else {
-			OutputDebugPrintf("[Debug] WxID is empty!");
+            OutputDebugPrintf("[Debug] Revoke XML is empty! | [%p, %p]", arg_msg, revoke_xml);
         }
     }
     else if (rip == (uint64_t)g_bpAdd2DB) 
     {
 		if (thread_state->anti_revoke_cur_msg == 0) return; //如果当前消息不需要防撤回 直接返回
 
-		int arg_bool_index = g_config_info.add2db_info.arg_bool_index;
-		uint64_t arg_bool = GetArgValue(ctx, arg_bool_index);
-		uint64_t arg_msg = GetArgValue(ctx, g_config_info.add2db_info.arg_msg_index);
+        int arg_bool_index = g_config_info.add2db_info.arg_bool_index;
+        uint64_t arg_bool = GetArgValue(ctx, arg_bool_index);
+        uint64_t arg_msg = GetArgValue(ctx, g_config_info.add2db_info.arg_msg_index);
         StdString* revoke_xml = (StdString*)(arg_msg + g_config_info.add2db_info.offset_revoke_xml);
         if (revoke_xml->size > 0) {
             OutputDebugPrintf("[Debug] %p | Revoke XML: %s | bool: %d", revoke_xml, *((uint64_t*)(revoke_xml->data_ptr)), arg_bool);
 
-            if (SetArgValue(ctx, arg_bool_index, 1)) {
-				OutputDebugPrintf("[Debug] Set Arg %d to 1", arg_bool_index);
-            }
-            else {
-				OutputDebugPrintf("[Debug] Set Arg %d Failed!", arg_bool_index);
-            }
+            uint64_t mem_srvid_addr = arg_msg + g_config_info.add2db_info.offset_srvid;
 
-			uint64_t mem_srvid_addr = arg_msg + g_config_info.add2db_info.offset_srvid;
-
-			uint8_t org_srvid[8] = { 0 };
+            uint8_t org_srvid[8] = { 0 };
             memcpy(org_srvid, (void*)mem_srvid_addr, 8);//读取原SrvID
             OutputDebugPrintf("[Debug] Org srvid: %p | Last srvid: %p", *((uint64_t*)org_srvid), *((uint64_t*)thread_state->last_org_srvid));
             if (memcmp(thread_state->last_org_srvid, org_srvid, 8) == 0) {
-				return; //防止插入两条撤回提醒
+                return; //防止插入两条撤回提醒
             }
-			memcpy(thread_state->last_org_srvid, org_srvid, 8);//更新全局记录的最后一个srvid
-			OutputDebugPrintf("[Debug] Update last srvid: %p", *((uint64_t*)thread_state->last_org_srvid));
+            memcpy(thread_state->last_org_srvid, org_srvid, 8);//更新全局记录的最后一个srvid
+            OutputDebugPrintf("[Debug] Update last srvid: %p", *((uint64_t*)thread_state->last_org_srvid));
 
 
             //修改srvid为随机的
@@ -432,35 +427,40 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
                 OutputDebugString(TEXT("[RevokeHook] GetUniquePositiveValue Err!"));
                 return;
             }
-			OutputDebugPrintf("[Debug] Original SrvID: %p [%X %X...]", mem_srvid_addr, ((uint8_t*)mem_srvid_addr)[0], ((uint8_t*)mem_srvid_addr)[1]);
-
-        
-			memcpy((void*)mem_srvid_addr, rand_srvid.data(), rand_srvid.size());
+            OutputDebugPrintf("[Debug] Original SrvID: %p [%X %X...]", mem_srvid_addr, ((uint8_t*)mem_srvid_addr)[0], ((uint8_t*)mem_srvid_addr)[1]);
+            memcpy((void*)mem_srvid_addr, rand_srvid.data(), rand_srvid.size());
 
             //修改撤回提醒字符串 (构造成sysmsg的)
             uint64_t revoke_xml_str_addr = *((uint64_t*)(revoke_xml->data_ptr));
-            uint8_t anchor[] = {0xe4, 0xb8, 0x80, 0xe6, 0x9d, 0xa1}; //'一条' utf-8
+            uint8_t anchor[] = { 0xe4, 0xb8, 0x80, 0xe6, 0x9d, 0xa1 }; //'一条' utf-8
             for (int i = 0; i <= revoke_xml->size - 6; i++) {
 
-				int equal_count = 0;
+                int equal_count = 0;
                 for (int j = 0; j < 6; j++) {
                     if (((uint8_t*)revoke_xml_str_addr)[i + j] == anchor[j])
                         equal_count++;
                     else
-						break;
+                        break;
                 }
                 if (equal_count == 6) {
-                    uint8_t replace[] = {0xe5, 0xa6, 0x82, 0xe4, 0xb8, 0x8a}; //'如上' utf-8
+                    uint8_t replace[] = { 0xe5, 0xa6, 0x82, 0xe4, 0xb8, 0x8a }; //'如上' utf-8
                     memcpy((void*)(revoke_xml_str_addr + i), replace, sizeof(replace));
-					OutputDebugPrintf("[Debug] Replace Revoke XML Success! | New XML: %s", (char*)revoke_xml_str_addr);
+                    OutputDebugPrintf("[Debug] Replace Revoke XML Success! | New XML: %s", (char*)revoke_xml_str_addr);
                     break;
-                }            
+                }
+            }
+
+			// 设置参数bool为TRUE
+            if (SetArgValue(ctx, arg_bool_index, 1)) {
+                OutputDebugPrintf("[Debug] Set Arg %d [%d] to [1]", arg_bool_index, (uint8_t)arg_bool);
+            }
+            else {
+                OutputDebugPrintf("[Debug] Set Arg %d Failed!", arg_bool_index);
             }
         }
         else {
             OutputDebugPrintf("[Debug] Revoke XML is empty! | [%p, %p]", arg_msg, revoke_xml);
         }
-    
     }
 }
 

@@ -22,11 +22,7 @@ public class DelMsgSection
 {
     public int ArgMsgIndex { get; set; }
 
-    public int OffsetWxIDFirst { get; set; }
-
-    public int OffsetWxIDSecond { get; set; }
-
-    public int OffsetWxIDThird { get; set; }
+    public int OffsetRevokeXML { get; set; }
 }
 
 public class Add2DbSection
