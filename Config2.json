@@ -25,6 +25,12 @@
         "DelMsgOffset": "0x215F6EE",
         "Add2DBOffset": "0x331FCD6"
       }
+    },
+    "4.1.8.29": {
+      "KeyFunc": {
+        "DelMsgOffset": "0x216333E",
+        "Add2DBOffset": "0x3323996"
+      }
     }
   }
 }
