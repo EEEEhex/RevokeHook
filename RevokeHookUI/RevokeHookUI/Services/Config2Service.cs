@@ -43,6 +43,15 @@ public static class Config2Service
         return TrySelect(config.Specific, preferredVersion, out version, out entry);
     }
 
+    public static bool TryGetExactSpecific(
+        Config2File config,
+        string? preferredVersion,
+        out string version,
+        out Config2SpecificEntry entry)
+    {
+        return TryGetExact(config.Specific, preferredVersion, out version, out entry);
+    }
+
     private static bool TrySelect<T>(
         IReadOnlyDictionary<string, T> values,
         string? preferredVersion,
@@ -110,6 +119,34 @@ public static class Config2Service
             .OrderByDescending(VersionSortKey)
             .First();
         entry = values[version];
+        return true;
+    }
+
+    private static bool TryGetExact<T>(
+        IReadOnlyDictionary<string, T> values,
+        string? preferredVersion,
+        out string version,
+        out T entry)
+    {
+        if (values.Count == 0 || string.IsNullOrWhiteSpace(preferredVersion))
+        {
+            version = string.Empty;
+            entry = default!;
+            return false;
+        }
+
+        var preferredKey = values.Keys.FirstOrDefault(key =>
+            string.Equals(NormalizeVersion(key), NormalizeVersion(preferredVersion), StringComparison.Ordinal));
+
+        if (preferredKey is null)
+        {
+            version = string.Empty;
+            entry = default!;
+            return false;
+        }
+
+        version = preferredKey;
+        entry = values[preferredKey];
         return true;
     }
 

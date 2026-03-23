@@ -33,7 +33,7 @@ public partial class MainWindow
     {
         EnsureLocalFiles();
 
-        AppendLog("程序启动 v4.1.0。");
+        AppendLog("程序启动 v4.1.1。");
         AppendLog("INI 路径: " + _iniPath);
         AppendLog("Config2 路径: " + _config2Path);
 
@@ -59,7 +59,7 @@ public partial class MainWindow
         progressWindow.Show();
 
         ToggleTopButtons(false);
-        AppendLog("开始从 GitHub 下载 Config2.json。");
+        AppendLog("开始从 云端 下载 Config2.json。");
 
         try
         {
@@ -67,7 +67,7 @@ public partial class MainWindow
             await CloudConfigService.DownloadLatestConfigAsync(_config2Path, progress);
 
             progressWindow.Report(new CloudDownloadProgress("云端配置下载完成, 正在解析...", 100, false));
-            ApplyConfig2(Config2Service.Load(_config2Path), applySpecificToUi: true);
+            ApplyConfig2(Config2Service.Load(_config2Path), applySpecificToUi: true, requireExactSpecificVersion: true);
             AppendLog("云端配置解析完成!");
             await progressWindow.DelayCloseAsync(700);
         }
@@ -255,7 +255,11 @@ public partial class MainWindow
         }
     }
 
-    private void ApplyConfig2(Config2File config2, bool applySpecificToUi, bool showStartupTip = false)
+    private void ApplyConfig2(
+        Config2File config2,
+        bool applySpecificToUi,
+        bool showStartupTip = false,
+        bool requireExactSpecificVersion = false)
     {
         var lookupVersion = _currentWechatVersion ?? _installedVersion;
 
@@ -282,6 +286,17 @@ public partial class MainWindow
         if (!applySpecificToUi)
         {
             return;
+        }
+
+        if (requireExactSpecificVersion && !string.IsNullOrWhiteSpace(lookupVersion))
+        {
+            if (!Config2Service.TryGetExactSpecific(config2, lookupVersion, out _, out _))
+            {
+                const string tipMessage = "云端配置中不存在与本地版本相等的配置, 请使用'搜索全部'";
+                AppendLog(tipMessage);
+                MessageBox.Show(this, tipMessage, "云端配置", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
         }
 
         if (Config2Service.TryGetSpecific(config2, lookupVersion, out var specificVersion, out var specificEntry))

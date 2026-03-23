@@ -16,7 +16,7 @@ public sealed record UpdateCheckResult(
 
 public static class UpdateCheckService
 {
-    public const string CurrentVersion = "v4.1.0";
+    public const string CurrentVersion = "v4.1.1";
 
     private const string DefaultLatestReleaseApiUrl = "https://api.github.com/repos/EEEEhex/RevokeHook/releases/latest";
 

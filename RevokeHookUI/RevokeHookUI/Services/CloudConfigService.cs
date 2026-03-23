@@ -12,9 +12,7 @@ public static class CloudConfigService
     private static readonly string[] CandidateUrls =
     {
         "https://raw.githubusercontent.com/EEEEhex/RevokeHook/main/Config2.json",
-        "https://raw.githubusercontent.com/EEEEhex/RevokeHook/master/Config2.json",
-        "https://raw.githubusercontent.com/EEEEhex/RevokeHook/main/RevokeHookUI/Config2.json",
-        "https://raw.githubusercontent.com/EEEEhex/RevokeHook/master/RevokeHookUI/Config2.json"
+        "http://47.109.182.110:8123/api/get_config2"
     };
 
     public static async Task DownloadLatestConfigAsync(
@@ -31,7 +29,7 @@ public static class CloudConfigService
         {
             try
             {
-                progress?.Report(new CloudDownloadProgress("正在连接 GitHub: " + candidateUrl, null, true));
+                progress?.Report(new CloudDownloadProgress("正在连接 Url: " + candidateUrl, null, true));
                 await DownloadAndValidateAsync(client, candidateUrl, destinationPath, progress, cancellationToken);
                 return;
             }
@@ -45,7 +43,7 @@ public static class CloudConfigService
             }
         }
 
-        throw new InvalidOperationException("无法从 GitHub 下载 Config2.json。", lastException);
+        throw new InvalidOperationException("无法从云端下载 Config2.json。", lastException);
     }
 
     private static IEnumerable<string> EnumerateCandidateUrls()
@@ -69,7 +67,9 @@ public static class CloudConfigService
         IProgress<CloudDownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
-        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(3));
+        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
         response.EnsureSuccessStatusCode();
 
         var totalBytes = response.Content.Headers.ContentLength;
