@@ -23,6 +23,18 @@
       "sig2_arg_bool_index": "0x5",
       "sig2_offset_revoke_xml": "0x160",
       "sig2_offset_srvid": "0x108"
+    },
+    "4.1.9.30": {
+      "sig1": "48 8D 55 ?? 45 31 C0 E8 ?? ?? ?? ?? 90 48 8B 9D ?? ?? ?? ?? 48 85 DB 74 ?? F0 FF 4B 08",
+      "sig2": "48 83 EC ?? 4C ?? ?? 48 ?? ?? C6 44 24 ?? 01 C6 44 24 ?? 00 4D ?? ?? 49 ?? ?? E8 ?? ?? ?? ?? 48 ?? ?? 48 83 C4 ??",
+      "sig1_delta": "0x7",
+      "sig2_delta": "0x1A",
+      "sig1_arg_msg_index": "0x2",
+      "sig1_offset_revoke_xml": "0x400",
+      "sig2_arg_msg_index": "0x3",
+      "sig2_arg_bool_index": "0x5",
+      "sig2_offset_revoke_xml": "0x160",
+      "sig2_offset_srvid": "0x108"
     }
   },
   "specific": {
@@ -60,6 +72,12 @@
       "KeyFunc": {
         "DelMsgOffset": "0x22057EE",
         "Add2DBOffset": "0x34138E6"
+      }
+    },
+    "4.1.9.30": {
+      "KeyFunc": {
+        "DelMsgOffset": "0x224A1EE",
+        "Add2DBOffset": "0x3477D9B"
       }
     }
   }
