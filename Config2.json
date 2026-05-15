@@ -85,6 +85,22 @@
         "DelMsgOffset": "0x2246D5E",
         "Add2DBOffset": "0x347491B"
       }
+    },
+    "4.1.9.55": {
+      "KeyFunc": {
+        "DelMsgOffset": "0x22792BE",
+        "Add2DBOffset": "0x34A43DB"
+      },
+      "DelMsg": {
+        "ArgMsgIndex": "0x2",
+        "OffsetRevokeXML": "0x480"
+      },
+      "Add2DB": {
+        "ArgMsgIndex": "0x3",
+        "ArgBoolIndex": "0x5",
+        "OffsetRevokeXML": "0x1A0",
+        "OffsetSrvID": "0x148"
+      }
     }
   }
 }
