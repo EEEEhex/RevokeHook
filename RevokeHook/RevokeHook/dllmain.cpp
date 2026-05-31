@@ -94,16 +94,18 @@ struct BASICINFO
 
 struct DELMSGINFO
 {
-    int arg_msg_index;
-    int offset_revoke_xml;
+    bool initialized;
+    int arg_msg_index;      // 哪个参数(2/3/4)指向包含revoke_xml的结构体
+    int offset_revoke_xml;  // StdString在结构体中的偏移
+    int arg_notify_index;   // 哪个参数是notify标志(值为0的那个)
 };
 
 struct ADD2DBINFO
 {
-    int arg_msg_index;
-    int arg_bool_index;
-    int offset_srvid;
-    int offset_revoke_xml;
+    bool initialized;
+    int arg_bool_index;     // 哪个参数是bool标志(值为0的那个)
+    int offset_srvid;       // srvid在r8结构体中的偏移
+    int offset_revoke_xml;  // revoke_xml StdString在r8结构体中的偏移
 };
 
 struct CONFIGINFO
@@ -271,14 +273,6 @@ bool ReadExternalConfig(char* ini_path)
 	g_config_info.basic_info.imgbase = (uint64_t)weixin_dll_base;
 	g_config_info.basic_info.delmsg_offset = g_config["KeyFunc"]["DelMsgOffset"].as<int>();
 	g_config_info.basic_info.add2db_offset = g_config["KeyFunc"]["Add2DBOffset"].as<int>();
-    
-	g_config_info.delmsg_info.arg_msg_index = g_config["DelMsg"]["ArgMsgIndex"].as<int>();
-	g_config_info.delmsg_info.offset_revoke_xml = g_config["DelMsg"]["OffsetRevokeXML"].as<int>();
-
-	g_config_info.add2db_info.arg_msg_index = g_config["Add2DB"]["ArgMsgIndex"].as<int>();
-	g_config_info.add2db_info.arg_bool_index = g_config["Add2DB"]["ArgBoolIndex"].as<int>();
-	g_config_info.add2db_info.offset_revoke_xml = g_config["Add2DB"]["OffsetRevokeXML"].as<int>();
-	g_config_info.add2db_info.offset_srvid = g_config["Add2DB"]["OffsetSrvID"].as<int>();
 
 	g_anti_revoke_self_msg = g_config["Setting"]["AntiRevokeSelf"].as<bool>();
 	g_output_debeug_msg = g_config["Setting"]["OutputDebugMsg"].as<bool>();
@@ -356,6 +350,105 @@ int SetArgValue(PCONTEXT ctx, int index, uint64_t value)
     }
 }
 
+static bool IsMemoryReadable(const void* addr, size_t size)
+{
+    if (addr == nullptr || size == 0) return false;
+
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0)
+        return false;
+    if (mbi.State != MEM_COMMIT)
+        return false;
+    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+        return false;
+    if (!(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)))
+        return false;
+
+    uintptr_t region_end = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+    return ((uintptr_t)addr + size) <= region_end;
+}
+
+static StdString* FindStdStringWithSig(uint64_t base_addr, size_t scan_range,
+    const uint8_t* sig, size_t sig_len)
+{
+    if (base_addr == 0)
+        return nullptr;
+
+    for (size_t offset = 0; offset + sizeof(StdString) <= scan_range; offset += 8)
+    {
+        uint64_t addr = base_addr + offset;
+        if (!IsMemoryReadable((void*)addr, sizeof(StdString)))
+            break;
+
+        StdString* ss = (StdString*)addr;
+
+        if (ss->size <= 16 || ss->size > 0x10000 ||
+            ss->capability < ss->size || ss->capability > 0x100000)
+            continue;
+
+        uint64_t str_addr = *((uint64_t*)(ss->data_ptr));
+        if (str_addr == 0 || !IsMemoryReadable((void*)str_addr, (size_t)ss->size))
+            continue;
+
+        for (int64_t i = 0; i <= (int64_t)ss->size - (int64_t)sig_len; i++)
+        {
+            if (memcmp((void*)(str_addr + i), sig, sig_len) == 0)
+                return ss;
+        }
+    }
+    return nullptr;
+}
+
+static int FindZeroArgIndex(PCONTEXT ctx, int start_idx, int end_idx)
+{
+    // Pass 1: 64-bit == 0
+    for (int i = start_idx; i <= end_idx; i++)
+    {
+        if (GetArgValue(ctx, i) == 0)
+            return i;
+    }
+    // Pass 2: low 32 bits == 0 (upper 32 might be garbage)
+    for (int i = start_idx; i <= end_idx; i++)
+    {
+        uint64_t val = GetArgValue(ctx, i);
+        if (val != 0 && (val & 0xFFFFFFFF) == 0)
+            return i;
+    }
+    // Pass 3: low byte == 0, but not a valid user-mode pointer
+    for (int i = start_idx; i <= end_idx; i++)
+    {
+        uint64_t val = GetArgValue(ctx, i);
+        if (val != 0 && (val & 0xFF) == 0 &&
+            !(val >= 0x10000 && val <= 0x00007FFFFFFFFFFF))
+            return i;
+    }
+    return -1;
+}
+
+static uint64_t FindSrvId(uint64_t base_addr, size_t scan_limit)
+{
+    for (size_t offset = 0; offset + 16 <= scan_limit; offset += 8)
+    {
+        uint8_t* candidate = (uint8_t*)(base_addr + offset);
+        if (!IsMemoryReadable(candidate, 16))
+            break;
+
+        if (candidate[14] != 0x00 || candidate[15] != 0x00)
+            continue;
+        if (candidate[12] == 0x00 && candidate[13] == 0x00)
+            continue;
+
+        int non_zero_count = 0;
+        for (int i = 0; i < 14; i++)
+        {
+            if (candidate[i] != 0) non_zero_count++;
+        }
+        if (non_zero_count == 14)
+            return (uint64_t)candidate;
+    }
+    return 0;
+}
+
 static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
 {
     uint64_t rip = ctx->Rip;
@@ -367,100 +460,186 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
   
     if (rip == (uint64_t)g_bpDelMsg) 
     {
-        uint64_t arg_msg = GetArgValue(ctx, g_config_info.delmsg_info.arg_msg_index);
-        StdString* revoke_xml = (StdString*)(arg_msg + g_config_info.delmsg_info.offset_revoke_xml);
-        if (revoke_xml->size > 0) {
-            uint64_t revoke_xml_str_addr = *((uint64_t*)(revoke_xml->data_ptr));
-            // OutputDebugPrintf("[Debug] %p | Revoke XML: %s", revoke_xml, revoke_xml_str_addr);
-            uint8_t self_revoke_sig[] = { 0xe4, 0xbd, 0xa0, 0xe6, 0x92, 0xa4, 0xe5, 0x9b, 0x9e }; //'你撤回' utf-8
-            for (int i = 0; i <= revoke_xml->size - sizeof(self_revoke_sig); i++) {
-                int equal_count = 0;
-                for (int j = 0; j < sizeof(self_revoke_sig); j++) {
-                    if (((uint8_t*)revoke_xml_str_addr)[i + j] == self_revoke_sig[j])
-                        equal_count++;
-                    else
-                        break;
-                }
-                if (equal_count == sizeof(self_revoke_sig)) { 
-                    if (!g_anti_revoke_self_msg) {
-                        thread_state->anti_revoke_cur_msg = 0; //重置状态
-                        return;
-                    }
-                    OutputDebugPrintf("[Debug] Anti Revoke SELF Msg...");
+        uint8_t revoke_sig[] = { 0xe6, 0x92, 0xa4, 0xe5, 0x9b, 0x9e }; //'撤回'
+        uint8_t self_revoke_sig[] = { 0xe4, 0xbd, 0xa0, 0xe6, 0x92, 0xa4, 0xe5, 0x9b, 0x9e }; //'你撤回'
+
+        StdString* revoke_xml = nullptr;
+
+        if (!g_config_info.delmsg_info.initialized)
+        {
+            uint64_t candidates[] = { ctx->Rdx, ctx->R8, ctx->R9 };
+            int candidate_indices[] = { 2, 3, 4 };
+
+            for (int c = 0; c < 3 && revoke_xml == nullptr; c++)
+            {
+                revoke_xml = FindStdStringWithSig(candidates[c], 0x2000,
+                    revoke_sig, sizeof(revoke_sig));
+                if (revoke_xml) {
+                    g_config_info.delmsg_info.arg_msg_index = candidate_indices[c];
+                    g_config_info.delmsg_info.offset_revoke_xml = (int)((uint64_t)revoke_xml - candidates[c]);
                 }
             }
 
-            thread_state->anti_revoke_cur_msg = 1; //标记当前这条消息是需要防撤回的
-            ctx->Rip += 5; // 跳过call
-            OutputDebugPrintf("[Debug] Skip Call, New RIP: %p", ctx->Rip);
+            if (revoke_xml == nullptr || revoke_xml->size <= 0)
+            {
+                OutputDebugPrintf("[Debug] DelMsg: Cannot find revoke_xml in registers");
+                return;
+            }
+
+            g_config_info.delmsg_info.arg_notify_index = FindZeroArgIndex(ctx, 3, 8);
+            g_config_info.delmsg_info.initialized = true;
+            OutputDebugPrintf("[Debug] DelMsg cached: msg_idx=%d, xml_off=0x%X, notify_idx=%d",
+                g_config_info.delmsg_info.arg_msg_index,
+                g_config_info.delmsg_info.offset_revoke_xml,
+                g_config_info.delmsg_info.arg_notify_index);
         }
-        else {
-            OutputDebugPrintf("[Debug] Revoke XML is empty! | [%p, %p]", arg_msg, revoke_xml);
+        else
+        {
+            uint64_t arg_msg = GetArgValue(ctx, g_config_info.delmsg_info.arg_msg_index);
+            revoke_xml = (StdString*)(arg_msg + g_config_info.delmsg_info.offset_revoke_xml);
+            if (!IsMemoryReadable(revoke_xml, sizeof(StdString)) || revoke_xml->size <= 0)
+            {
+                OutputDebugPrintf("[Debug] DelMsg: revoke_xml invalid (cached path)");
+                return;
+            }
         }
+
+        uint64_t revoke_xml_str_addr = *((uint64_t*)(revoke_xml->data_ptr));
+        if (revoke_xml_str_addr == 0 || !IsMemoryReadable((void*)revoke_xml_str_addr, (size_t)revoke_xml->size))
+        {
+            OutputDebugPrintf("[Debug] DelMsg: revoke_xml str invalid");
+            return;
+        }
+
+        bool is_self = false;
+        for (int64_t i = 0; i <= (int64_t)revoke_xml->size - (int64_t)sizeof(self_revoke_sig); i++)
+        {
+            if (memcmp((void*)(revoke_xml_str_addr + i), self_revoke_sig, sizeof(self_revoke_sig)) == 0)
+            {
+                is_self = true;
+                break;
+            }
+        }
+
+        if (is_self && !g_anti_revoke_self_msg)
+        {
+            thread_state->anti_revoke_cur_msg = 0;
+            return;
+        }
+        if (is_self)
+            OutputDebugPrintf("[Debug] Anti Revoke SELF Msg...");
+
+        thread_state->anti_revoke_cur_msg = 1;
+
+        if (g_config_info.delmsg_info.arg_notify_index > 0)
+        {
+            SetArgValue(ctx, g_config_info.delmsg_info.arg_notify_index, 1);
+            OutputDebugPrintf("[Debug] Set notify arg %d to 1", g_config_info.delmsg_info.arg_notify_index);
+        }
+
+        ctx->Rip += 5;
+        OutputDebugPrintf("[Debug] Skip Call, New RIP: %p", ctx->Rip);
     }
     else if (rip == (uint64_t)g_bpAdd2DB) 
     {
-		if (thread_state->anti_revoke_cur_msg == 0) return; //如果当前消息不需要防撤回 直接返回
+		if (thread_state->anti_revoke_cur_msg == 0) return;
 
-        int arg_bool_index = g_config_info.add2db_info.arg_bool_index;
-        uint64_t arg_bool = GetArgValue(ctx, arg_bool_index);
-        uint64_t arg_msg = GetArgValue(ctx, g_config_info.add2db_info.arg_msg_index);
-        StdString* revoke_xml = (StdString*)(arg_msg + g_config_info.add2db_info.offset_revoke_xml);
-        if (revoke_xml->size > 0) {
-            OutputDebugPrintf("[Debug] %p | Revoke XML: %s | bool: %d", revoke_xml, *((uint64_t*)(revoke_xml->data_ptr)), arg_bool);
-
-            uint64_t mem_srvid_addr = arg_msg + g_config_info.add2db_info.offset_srvid;
-
-            uint8_t org_srvid[8] = { 0 };
-            memcpy(org_srvid, (void*)mem_srvid_addr, 8);//读取原SrvID
-            OutputDebugPrintf("[Debug] Org srvid: %p | Last srvid: %p", *((uint64_t*)org_srvid), *((uint64_t*)thread_state->last_org_srvid));
-            if (memcmp(thread_state->last_org_srvid, org_srvid, 8) == 0) {
-                return; //防止插入两条撤回提醒
-            }
-            memcpy(thread_state->last_org_srvid, org_srvid, 8);//更新全局记录的最后一个srvid
-            OutputDebugPrintf("[Debug] Update last srvid: %p", *((uint64_t*)thread_state->last_org_srvid));
-
-
-            //修改srvid为随机的
-            std::vector<uint8_t> rand_srvid = GetUniquePositiveValue();
-            if (rand_srvid.size() != 8) {
-                OutputDebugString(TEXT("[RevokeHook] GetUniquePositiveValue Err!"));
+        if (!g_config_info.add2db_info.initialized)
+        {
+            int arg_bool_index = FindZeroArgIndex(ctx, 3, 8);
+            if (arg_bool_index < 0)
+            {
+                OutputDebugPrintf("[Debug] Add2DB: Cannot find arg_bool (0 param)");
                 return;
             }
-            OutputDebugPrintf("[Debug] Original SrvID: %p [%X %X...]", mem_srvid_addr, ((uint8_t*)mem_srvid_addr)[0], ((uint8_t*)mem_srvid_addr)[1]);
-            memcpy((void*)mem_srvid_addr, rand_srvid.data(), rand_srvid.size());
 
-            //修改撤回提醒字符串 (构造成sysmsg的)
-            uint64_t revoke_xml_str_addr = *((uint64_t*)(revoke_xml->data_ptr));
+            uint64_t arg_msg = GetArgValue(ctx, 3);
+            if (arg_msg == 0 || !IsMemoryReadable((void*)arg_msg, 0x100))
+            {
+                OutputDebugPrintf("[Debug] Add2DB: arg_msg is invalid");
+                return;
+            }
+
             uint8_t anchor[] = { 0xe4, 0xb8, 0x80, 0xe6, 0x9d, 0xa1 }; //'一条' utf-8
-            for (int i = 0; i <= revoke_xml->size - 6; i++) {
-
-                int equal_count = 0;
-                for (int j = 0; j < 6; j++) {
-                    if (((uint8_t*)revoke_xml_str_addr)[i + j] == anchor[j])
-                        equal_count++;
-                    else
-                        break;
-                }
-                if (equal_count == 6) {
-                    uint8_t replace[] = { 0xe5, 0xa6, 0x82, 0xe4, 0xb8, 0x8a }; //'如上' utf-8
-                    memcpy((void*)(revoke_xml_str_addr + i), replace, sizeof(replace));
-                    OutputDebugPrintf("[Debug] Replace Revoke XML Success! | New XML: %s", (char*)revoke_xml_str_addr);
-                    break;
-                }
+            StdString* revoke_xml = FindStdStringWithSig(arg_msg, 0x1000, anchor, sizeof(anchor));
+            if (revoke_xml == nullptr || revoke_xml->size <= 0)
+            {
+                OutputDebugPrintf("[Debug] Add2DB: Cannot find revoke_xml");
+                return;
             }
 
-			// 设置参数bool为TRUE
-            if (SetArgValue(ctx, arg_bool_index, 1)) {
-                OutputDebugPrintf("[Debug] Set Arg %d [%d] to [1]", arg_bool_index, (uint8_t)arg_bool);
+            int xml_offset = (int)((uint64_t)revoke_xml - arg_msg);
+            uint64_t mem_srvid_addr = FindSrvId(arg_msg, (size_t)xml_offset);
+            if (mem_srvid_addr == 0)
+            {
+                OutputDebugPrintf("[Debug] Add2DB: Cannot find srvid");
+                return;
             }
-            else {
-                OutputDebugPrintf("[Debug] Set Arg %d Failed!", arg_bool_index);
+
+            g_config_info.add2db_info.arg_bool_index = arg_bool_index;
+            g_config_info.add2db_info.offset_revoke_xml = xml_offset;
+            g_config_info.add2db_info.offset_srvid = (int)(mem_srvid_addr - arg_msg);
+            g_config_info.add2db_info.initialized = true;
+            OutputDebugPrintf("[Debug] Add2DB cached: bool_idx=%d, xml_off=0x%X, srvid_off=0x%X",
+                g_config_info.add2db_info.arg_bool_index,
+                g_config_info.add2db_info.offset_revoke_xml,
+                g_config_info.add2db_info.offset_srvid);
+        }
+
+        int arg_bool_index = g_config_info.add2db_info.arg_bool_index;
+        uint64_t arg_msg = GetArgValue(ctx, 3);
+        if (arg_msg == 0 || !IsMemoryReadable((void*)arg_msg, 0x100))
+        {
+            OutputDebugPrintf("[Debug] Add2DB: arg_msg invalid");
+            return;
+        }
+
+        StdString* revoke_xml = (StdString*)(arg_msg + g_config_info.add2db_info.offset_revoke_xml);
+        if (!IsMemoryReadable(revoke_xml, sizeof(StdString)) || revoke_xml->size <= 0)
+        {
+            OutputDebugPrintf("[Debug] Add2DB: revoke_xml invalid");
+            return;
+        }
+
+        uint64_t mem_srvid_addr = arg_msg + g_config_info.add2db_info.offset_srvid;
+
+        uint64_t revoke_xml_str_addr = *((uint64_t*)(revoke_xml->data_ptr));
+        OutputDebugPrintf("[Debug] %p | Revoke XML: %s | bool_idx: %d", revoke_xml, (char*)revoke_xml_str_addr, arg_bool_index);
+
+        uint8_t org_srvid[8] = { 0 };
+        memcpy(org_srvid, (void*)mem_srvid_addr, 8);
+        OutputDebugPrintf("[Debug] Org srvid: %p | Last srvid: %p", *((uint64_t*)org_srvid), *((uint64_t*)thread_state->last_org_srvid));
+        if (memcmp(thread_state->last_org_srvid, org_srvid, 8) == 0)
+        {
+            return;
+        }
+        memcpy(thread_state->last_org_srvid, org_srvid, 8);
+        OutputDebugPrintf("[Debug] Update last srvid: %p", *((uint64_t*)thread_state->last_org_srvid));
+
+        std::vector<uint8_t> rand_srvid = GetUniquePositiveValue();
+        if (rand_srvid.size() != 8) {
+            OutputDebugString(TEXT("[RevokeHook] GetUniquePositiveValue Err!"));
+            return;
+        }
+        OutputDebugPrintf("[Debug] Original SrvID: %p [%X %X...]", mem_srvid_addr, ((uint8_t*)mem_srvid_addr)[0], ((uint8_t*)mem_srvid_addr)[1]);
+        memcpy((void*)mem_srvid_addr, rand_srvid.data(), rand_srvid.size());
+
+        uint8_t anchor[] = { 0xe4, 0xb8, 0x80, 0xe6, 0x9d, 0xa1 }; //'一条' utf-8
+        for (int64_t i = 0; i <= (int64_t)revoke_xml->size - (int64_t)sizeof(anchor); i++)
+        {
+            if (memcmp((void*)(revoke_xml_str_addr + i), anchor, sizeof(anchor)) == 0)
+            {
+                uint8_t replace[] = { 0xe5, 0xa6, 0x82, 0xe4, 0xb8, 0x8a }; //'如上' utf-8
+                memcpy((void*)(revoke_xml_str_addr + i), replace, sizeof(replace));
+                OutputDebugPrintf("[Debug] Replace Revoke XML Success! | New XML: %s", (char*)revoke_xml_str_addr);
+                break;
             }
         }
-        else {
-            OutputDebugPrintf("[Debug] Revoke XML is empty! | [%p, %p]", arg_msg, revoke_xml);
-        }
+
+        if (SetArgValue(ctx, arg_bool_index, 1))
+            OutputDebugPrintf("[Debug] Set Arg %d to 1", arg_bool_index);
+        else
+            OutputDebugPrintf("[Debug] Set Arg %d Failed!", arg_bool_index);
     }
 }
 

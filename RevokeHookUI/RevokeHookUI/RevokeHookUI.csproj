@@ -15,11 +15,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="capstone" Version="4.0.2" />
     <PackageReference Include="WPF-UI" Version="4.2.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Config2.json">
+    <None Update="Config3.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="RevokeHook.ini">

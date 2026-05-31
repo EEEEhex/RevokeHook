@@ -7,9 +7,9 @@
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
     mc:Ignorable="d"
     Title="RevokeHook 配置工具"
-    Width="1000"
+    Width="1040"
     Height="820"
-    MinWidth="1040"
+    MinWidth="980"
     MinHeight="760"
     WindowStartupLocation="CenterScreen"
     ExtendsContentIntoTitleBar="True"
@@ -28,10 +28,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-
-        <ui:TitleBar Grid.Row="0" Title="" CloseWindowByDoubleClickOnIcon="True">
-        </ui:TitleBar>
-
+        <ui:TitleBar Grid.Row="0" Title="" CloseWindowByDoubleClickOnIcon="True"/>
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
@@ -46,7 +43,7 @@
                 <TextBlock x:Name="VersionHintTextBlock"
                            Margin="0,4,0,0"
                            Opacity="0.75"
-                           Text="启动时会从本地 ini 和 Config2.json 读取配置。"/>
+                           Text="启动时会从本地 ini 和 Config3.json 读取配置。"/>
             </StackPanel>
 
             <WrapPanel Grid.Column="1"
@@ -69,7 +66,7 @@
                         Width="96"
                         Height="36"
                         Margin="0,0,8,0"
-                        Content="搜索全部"
+                        Content="开始搜索"
                         Click="SearchAllButton_Click"/>
                 <Button x:Name="CreateLinkButton"
                         Width="140"
@@ -91,426 +88,175 @@
             </WrapPanel>
         </Grid>
 
-        <Grid Grid.Row="4">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="12"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
+        <ui:Card Grid.Row="4" Padding="16">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="12"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="12"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="12"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-            <ui:Card Grid.Column="0" Padding="16">
-                <Grid>
+                <TextBlock Grid.Row="0"
+                           Text="字符串特征与搜索结果"
+                           FontSize="18"
+                           FontWeight="SemiBold"/>
+
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="12"/>
+                        <RowDefinition Height="8"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="12"/>
+                        <RowDefinition Height="8"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0"
-                               Text="DelMsg 特征码搜索"
-                               FontSize="18"
-                               FontWeight="SemiBold"/>
+                               Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Text="特征码1"/>
+                    <TextBox Grid.Row="0"
+                             Grid.Column="1"
+                             x:Name="Signature1TextBox"/>
 
-                    <Grid Grid.Row="2">
+                    <TextBlock Grid.Row="2"
+                               Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Text="特征码2"/>
+                    <TextBox Grid.Row="2"
+                             Grid.Column="1"
+                             x:Name="Signature2TextBox"/>
+
+                    <TextBlock Grid.Row="4"
+                               Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Text="特征码3"/>
+                    <TextBox Grid.Row="4"
+                             Grid.Column="1"
+                             x:Name="Signature3TextBox"/>
+                </Grid>
+
+                <Grid Grid.Row="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="16"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Grid Grid.Column="0">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="96"/>
+                            <ColumnDefinition Width="170"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-
                         <TextBlock Grid.Column="0"
                                    VerticalAlignment="Center"
-                                   Text="特征码"/>
+                                   Text="DeleteMessages 偏移"/>
                         <TextBox Grid.Column="1"
-                                 x:Name="DelMsgPatternTextBox"/>
+                                 x:Name="KeyFuncDelMsgOffsetTextBox"
+                                 IsReadOnly="True"/>
                     </Grid>
 
-                    <Grid Grid.Row="4">
+                    <Grid Grid.Column="2">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="150"/>
-                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="195"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-
-                        <Grid Grid.Column="0">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Text="搜索结果偏移"/>
-                            <TextBox Grid.Row="2"
-                                     x:Name="DelMsgResultDeltaTextBox"/>
-                        </Grid>
-
-                        <Grid Grid.Column="2">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Text="结果预览"/>
-                            <TextBox Grid.Row="2"
-                                     x:Name="DelMsgSearchResultTextBox"
-                                     IsReadOnly="True"/>
-                        </Grid>
-
-                        <Button Grid.Column="4"
-                                Width="110"
-                                Height="36"
-                                HorizontalAlignment="Right"
-                                VerticalAlignment="Bottom"
-                                Content="搜索特征码1"
-                                Click="SearchDelMsgButton_Click"/>
-                    </Grid>
-                </Grid>
-            </ui:Card>
-
-            <ui:Card Grid.Column="2" Padding="16">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="12"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="12"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0"
-                               Text="Add2DB 特征码搜索"
-                               FontSize="18"
-                               FontWeight="SemiBold"/>
-
-                    <Grid Grid.Row="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="96"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
                         <TextBlock Grid.Column="0"
                                    VerticalAlignment="Center"
-                                   Text="特征码"/>
+                                   Text="CoAddMessageToDB 偏移"/>
                         <TextBox Grid.Column="1"
-                                 x:Name="Add2DBPatternTextBox"/>
+                                 x:Name="KeyFuncAdd2DBOffsetTextBox"
+                                 IsReadOnly="True"/>
                     </Grid>
+                </Grid>
 
-                    <Grid Grid.Row="4">
+                <Grid Grid.Row="6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="16"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="96"/>
+                        <RowDefinition Height="12"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBox Grid.Row="0"
+                             Grid.Column="0"
+                             x:Name="DeleteMessagesChainTextBox"
+                             IsReadOnly="True"
+                             AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas"
+                             FontSize="13"/>
+                    <TextBox Grid.Row="0"
+                             Grid.Column="2"
+                             x:Name="AddMessageToDbChainTextBox"
+                             IsReadOnly="True"
+                             AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas"
+                             FontSize="13"/>
+
+                    <Grid Grid.Row="2"
+                          Grid.ColumnSpan="3">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="150"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="260"/>
                         </Grid.ColumnDefinitions>
 
-                        <Grid Grid.Column="0">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Text="搜索结果偏移"/>
-                            <TextBox Grid.Row="2"
-                                     x:Name="Add2DBResultDeltaTextBox"/>
-                        </Grid>
-
-                        <Grid Grid.Column="2">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="6"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Text="结果预览"/>
-                            <TextBox Grid.Row="2"
-                                     x:Name="Add2DBSearchResultTextBox"
-                                     IsReadOnly="True"/>
-                        </Grid>
-
-                        <Button Grid.Column="4"
-                                Width="120"
-                                Height="36"
-                                HorizontalAlignment="Right"
-                                VerticalAlignment="Bottom"
-                                Content="搜索特征码2"
-                                Click="SearchAdd2DBButton_Click"/>
+                        <ProgressBar Grid.Column="0"
+                                     x:Name="SearchProgressBar"
+                                     Height="12"
+                                     Minimum="0"
+                                     Maximum="100"/>
+                        <TextBlock Grid.Column="2"
+                                   x:Name="SearchProgressTextBlock"
+                                   VerticalAlignment="Center"
+                                   Opacity="0.75"
+                                   Text="等待搜索"/>
                     </Grid>
                 </Grid>
-            </ui:Card>
-        </Grid>
+            </Grid>
+        </ui:Card>
 
-        <Grid Grid.Row="6">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="12"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
+        <ui:Card Grid.Row="6" Padding="16">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="12"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="12"/>
-                <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0"
+                           Text="[Setting]"
+                           FontSize="18"
+                           FontWeight="SemiBold"/>
 
-            <ui:Card Grid.Row="0" Grid.Column="0" Padding="16" VerticalAlignment="Stretch">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="12"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0"
-                               Text="[关键函数偏移]"
-                               FontSize="18"
-                               FontWeight="SemiBold"/>
-
-                    <Grid Grid.Row="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <Grid Grid.Column="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="2*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="DelMsg偏移"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="KeyFuncDelMsgOffsetTextBox"
-                                     MinWidth="80"/>
-                        </Grid>
-
-                        <Grid Grid.Column="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="2*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="Add2DB偏移"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="KeyFuncAdd2DBOffsetTextBox"
-                                     MinWidth="80"/>
-                        </Grid>
-                    </Grid>
-                </Grid>
-            </ui:Card>
-
-            <ui:Card Grid.Row="0" Grid.Column="2" Padding="16" VerticalAlignment="Stretch">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="12"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0"
-                               Text="[DelMsg函数参数]"
-                               FontSize="18"
-                               FontWeight="SemiBold"/>
-
-                    <Grid Grid.Row="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <Grid Grid.Column="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="Msg参数index"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="DelMsgArgMsgIndexTextBox"
-                                     MinWidth="60"/>
-                        </Grid>
-
-                        <Grid Grid.Column="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="RevokeXML偏移"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="DelMsgOffsetRevokeXmlTextBox"
-                                     MinWidth="60"/>
-                        </Grid>
-                    </Grid>
-                </Grid>
-            </ui:Card>
-
-            <ui:Card Grid.Row="2" Grid.Column="0" Padding="16" VerticalAlignment="Stretch">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="12"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="10"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0"
-                               Text="[Add2DB函数参数]"
-                               FontSize="18"
-                               FontWeight="SemiBold"/>
-
-                    <Grid Grid.Row="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <Grid Grid.Column="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="Msg参数index"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="Add2DBArgMsgIndexTextBox"
-                                     MinWidth="60"/>
-                        </Grid>
-
-                        <Grid Grid.Column="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="Bool参数index"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="Add2DBArgBoolIndexTextBox"
-                                     MinWidth="60"/>
-                        </Grid>
-                    </Grid>
-
-                    <Grid Grid.Row="4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <Grid Grid.Column="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="RevokeXML偏移"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="Add2DBOffsetRevokeXmlTextBox"
-                                     MinWidth="60"/>
-                        </Grid>
-
-                        <Grid Grid.Column="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="2*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Text="SrvID偏移"/>
-
-                            <TextBox Grid.Column="1"
-                                     x:Name="Add2DBOffsetSrvIdTextBox"
-                                     MinWidth="60"/>
-                        </Grid>
-                    </Grid>
-                </Grid>
-            </ui:Card>
-
-            <ui:Card Grid.Row="2" Grid.Column="2" Padding="16" VerticalAlignment="Stretch">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="12"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0"
-                               Text="[Setting]"
-                               FontSize="18"
-                               FontWeight="SemiBold"/>
-
-                    <Grid Grid.Row="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="10"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <CheckBox Grid.Row="0"
-                                  Grid.Column="0"
-                                  x:Name="AutoRunCheckBox"
-                                  Content="RevokeInject开机自启"/>
-
-                        <CheckBox Grid.Row="0"
-                                  Grid.Column="2"
-                                  x:Name="OutputDebugMsgCheckBox"
-                                  Content="调试信息开关"/>
-
-                        <CheckBox Grid.Row="2"
-                                  Grid.Column="0"
-                                  x:Name="OverTipCheckBox"
-                                  Content="注入完毕显示提醒"/>
-
-                        <CheckBox Grid.Row="2"
-                                  Grid.Column="2"
-                                  x:Name="AntiRevokeSelfCheckBox"
-                                  Content="防撤回自己的消息"/>
-                    </Grid>
-                </Grid>
-            </ui:Card>
-        </Grid>
+                <UniformGrid Grid.Row="2"
+                             Columns="4">
+                    <CheckBox x:Name="AutoRunCheckBox"
+                              Content="RevokeInject开机自启"/>
+                    <CheckBox x:Name="OutputDebugMsgCheckBox"
+                              Content="调试信息开关"/>
+                    <CheckBox x:Name="OverTipCheckBox"
+                              Content="注入完毕显示提醒"/>
+                    <CheckBox x:Name="AntiRevokeSelfCheckBox"
+                              Content="防撤回自己的消息"/>
+                </UniformGrid>
+            </Grid>
+        </ui:Card>
 
         <ui:Card Grid.Row="8" Padding="16" VerticalAlignment="Stretch" VerticalContentAlignment="Stretch">
             <Grid>

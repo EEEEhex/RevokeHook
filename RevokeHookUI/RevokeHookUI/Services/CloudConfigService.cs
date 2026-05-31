@@ -11,8 +11,8 @@ public static class CloudConfigService
 {
     private static readonly string[] CandidateUrls =
     {
-        "https://raw.githubusercontent.com/EEEEhex/RevokeHook/main/Config2.json",
-        "http://47.109.182.110:8123/api/get_config2"
+        "https://raw.githubusercontent.com/EEEEhex/RevokeHook/main/Config3.json",
+        "http://47.109.182.110:8123/api/get_config3"
     };
 
     public static async Task DownloadLatestConfigAsync(
@@ -43,12 +43,12 @@ public static class CloudConfigService
             }
         }
 
-        throw new InvalidOperationException("无法从云端下载 Config2.json。", lastException);
+        throw new InvalidOperationException("无法从云端下载 Config3.json。", lastException);
     }
 
     private static IEnumerable<string> EnumerateCandidateUrls()
     {
-        var overrideUrl = Environment.GetEnvironmentVariable("REVOKEHOOK_CONFIG2_URL");
+        var overrideUrl = Environment.GetEnvironmentVariable("REVOKEHOOK_CONFIG3_URL");
         if (!string.IsNullOrWhiteSpace(overrideUrl))
         {
             yield return overrideUrl;
@@ -101,18 +101,18 @@ public static class CloudConfigService
                 }
 
                 progress?.Report(new CloudDownloadProgress(
-                    $"正在下载 Config2.json ({totalRead / 1024d:F1} KB)",
+                    $"正在下载 Config3.json ({totalRead / 1024d:F1} KB)",
                     percentage,
                     isIndeterminate));
             }
         }
 
         var content = await File.ReadAllTextAsync(tempPath, cancellationToken);
-        var parsed = Config2Service.Parse(content);
-        if (parsed.General.Count == 0)
+        var parsed = Config3Service.Parse(content);
+        if (parsed.Versions.Count == 0)
         {
             File.Delete(tempPath);
-            throw new InvalidDataException("下载内容不是有效的 Config2.json。");
+            throw new InvalidDataException("下载内容不是有效的 Config3.json。");
         }
 
         File.Copy(tempPath, destinationPath, true);

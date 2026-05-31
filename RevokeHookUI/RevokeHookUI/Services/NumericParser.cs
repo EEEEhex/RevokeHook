@@ -14,8 +14,8 @@ public static class NumericParser
         var value = text.Trim();
         if (value.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
-            return int.TryParse(value[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hexValue)
-                ? hexValue
+            return uint.TryParse(value[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hexValue)
+                ? unchecked((int)hexValue)
                 : 0;
         }
 
@@ -30,6 +30,11 @@ public static class NumericParser
     }
 
     public static string FormatHex(int value)
+    {
+        return $"0x{value:X}";
+    }
+
+    public static string FormatHexUnchecked(uint value)
     {
         return $"0x{value:X}";
     }

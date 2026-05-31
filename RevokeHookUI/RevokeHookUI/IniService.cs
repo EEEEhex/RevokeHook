@@ -52,18 +52,6 @@ public static class IniService
         builder.AppendLine($"Add2DBOffset={config.KeyFunc.Add2DBOffset}");
         builder.AppendLine();
 
-        builder.AppendLine("[DelMsg]");
-        builder.AppendLine($"ArgMsgIndex={config.DelMsg.ArgMsgIndex}");
-        builder.AppendLine($"OffsetRevokeXML={config.DelMsg.OffsetRevokeXML}");
-        builder.AppendLine();
-
-        builder.AppendLine("[Add2DB]");
-        builder.AppendLine($"ArgMsgIndex={config.Add2DB.ArgMsgIndex}");
-        builder.AppendLine($"ArgBoolIndex={config.Add2DB.ArgBoolIndex}");
-        builder.AppendLine($"OffsetRevokeXML={config.Add2DB.OffsetRevokeXML}");
-        builder.AppendLine($"OffsetSrvID={config.Add2DB.OffsetSrvID}");
-        builder.AppendLine();
-
         builder.AppendLine("[Setting]");
         builder.AppendLine($"AutoRun={config.Setting.AutoRun.ToString().ToLowerInvariant()}");
         builder.AppendLine($"OverTip={config.Setting.OverTip.ToString().ToLowerInvariant()}");
@@ -87,36 +75,6 @@ public static class IniService
                 else if (key == "Add2DBOffset")
                 {
                     config.KeyFunc.Add2DBOffset = NumericParser.ParseInt(value);
-                }
-
-                break;
-            case "DelMsg":
-                if (key == "ArgMsgIndex")
-                {
-                    config.DelMsg.ArgMsgIndex = NumericParser.ParseInt(value);
-                }
-                else if (key == "OffsetRevokeXML")
-                {
-                    config.DelMsg.OffsetRevokeXML = NumericParser.ParseInt(value);
-                }
-
-                break;
-            case "Add2DB":
-                if (key == "ArgMsgIndex")
-                {
-                    config.Add2DB.ArgMsgIndex = NumericParser.ParseInt(value);
-                }
-                else if (key == "ArgBoolIndex")
-                {
-                    config.Add2DB.ArgBoolIndex = NumericParser.ParseInt(value);
-                }
-                else if (key == "OffsetRevokeXML")
-                {
-                    config.Add2DB.OffsetRevokeXML = NumericParser.ParseInt(value);
-                }
-                else if (key == "OffsetSrvID")
-                {
-                    config.Add2DB.OffsetSrvID = NumericParser.ParseInt(value);
                 }
 
                 break;

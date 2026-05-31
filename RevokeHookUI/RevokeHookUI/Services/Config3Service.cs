@@ -4,7 +4,7 @@ using RevokeHookUI.Models;
 
 namespace RevokeHookUI.Services;
 
-public static class Config2Service
+public static class Config3Service
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -13,43 +13,28 @@ public static class Config2Service
         AllowTrailingCommas = true
     };
 
-    public static Config2File Load(string path)
+    public static Config3File Load(string path)
     {
         var json = File.ReadAllText(path);
         return Parse(json);
     }
 
-    public static Config2File Parse(string json)
+    public static Config3File Parse(string json)
     {
-        var config = JsonSerializer.Deserialize<Config2File>(json, JsonOptions);
-        return config ?? new Config2File();
+        var versions = JsonSerializer.Deserialize<Dictionary<string, Config3Entry>>(json, JsonOptions);
+        return new Config3File
+        {
+            Versions = versions ?? new Dictionary<string, Config3Entry>()
+        };
     }
 
-    public static bool TryGetGeneral(
-        Config2File config,
+    public static bool TryGet(
+        Config3File config,
         string? preferredVersion,
         out string version,
-        out Config2GeneralEntry entry)
+        out Config3Entry entry)
     {
-        return TrySelect(config.General, preferredVersion, out version, out entry);
-    }
-
-    public static bool TryGetSpecific(
-        Config2File config,
-        string? preferredVersion,
-        out string version,
-        out Config2SpecificEntry entry)
-    {
-        return TrySelect(config.Specific, preferredVersion, out version, out entry);
-    }
-
-    public static bool TryGetExactSpecific(
-        Config2File config,
-        string? preferredVersion,
-        out string version,
-        out Config2SpecificEntry entry)
-    {
-        return TryGetExact(config.Specific, preferredVersion, out version, out entry);
+        return TrySelect(config.Versions, preferredVersion, out version, out entry);
     }
 
     private static bool TrySelect<T>(
@@ -119,34 +104,6 @@ public static class Config2Service
             .OrderByDescending(VersionSortKey)
             .First();
         entry = values[version];
-        return true;
-    }
-
-    private static bool TryGetExact<T>(
-        IReadOnlyDictionary<string, T> values,
-        string? preferredVersion,
-        out string version,
-        out T entry)
-    {
-        if (values.Count == 0 || string.IsNullOrWhiteSpace(preferredVersion))
-        {
-            version = string.Empty;
-            entry = default!;
-            return false;
-        }
-
-        var preferredKey = values.Keys.FirstOrDefault(key =>
-            string.Equals(NormalizeVersion(key), NormalizeVersion(preferredVersion), StringComparison.Ordinal));
-
-        if (preferredKey is null)
-        {
-            version = string.Empty;
-            entry = default!;
-            return false;
-        }
-
-        version = preferredKey;
-        entry = values[preferredKey];
         return true;
     }
 

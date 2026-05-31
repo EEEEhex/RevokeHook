@@ -12,17 +12,17 @@ public partial class MainWindow
 {
     private readonly string _baseDirectory = AppContext.BaseDirectory;
     private readonly string _iniPath;
-    private readonly string _config2Path;
+    private readonly string _configPath;
     private readonly string? _installedVersion;
-    private string? _displayedConfigTip;
     private string? _currentWechatVersion;
+    private RevokeHookConfig _currentConfig = new();
 
     public MainWindow()
     {
         InitializeComponent();
 
         _iniPath = Path.Combine(_baseDirectory, "RevokeHook.ini");
-        _config2Path = Path.Combine(_baseDirectory, "Config2.json");
+        _configPath = Path.Combine(_baseDirectory, "Config3.json");
         _installedVersion = WindowsSystemService.TryGetWeChatVersion();
         _currentWechatVersion = _installedVersion;
 
@@ -33,9 +33,9 @@ public partial class MainWindow
     {
         EnsureLocalFiles();
 
-        AppendLog("程序启动 v4.1.1。");
+        AppendLog("程序启动 v5.0.0。");
         AppendLog("INI 路径: " + _iniPath);
-        AppendLog("Config2 路径: " + _config2Path);
+        AppendLog("Config3 路径: " + _configPath);
 
         if (!string.IsNullOrWhiteSpace(_installedVersion))
         {
@@ -44,12 +44,12 @@ public partial class MainWindow
         }
         else
         {
-            VersionHintTextBlock.Text = "未自动检测到微信版本, 将回退到 Config2.json 中最新版本。";
-            AppendLog("未检测到微信版本, 将回退到 Config2.json 中最新版本。");
+            VersionHintTextBlock.Text = "未自动检测到微信版本, 将回退到 Config3.json 中最新版本。";
+            AppendLog("未检测到微信版本, 将回退到 Config3.json 中最新版本。");
         }
 
         LoadIniConfiguration();
-        LoadLocalConfig2Configuration();
+        LoadLocalConfigConfiguration();
     }
 
     private async void LoadCloudButton_Click(object sender, RoutedEventArgs e)
@@ -59,15 +59,15 @@ public partial class MainWindow
         progressWindow.Show();
 
         ToggleTopButtons(false);
-        AppendLog("开始从 云端 下载 Config2.json。");
+        AppendLog("开始从 云端 下载 Config3.json。");
 
         try
         {
             var progress = new Progress<CloudDownloadProgress>(progressWindow.Report);
-            await CloudConfigService.DownloadLatestConfigAsync(_config2Path, progress);
+            await CloudConfigService.DownloadLatestConfigAsync(_configPath, progress);
 
             progressWindow.Report(new CloudDownloadProgress("云端配置下载完成, 正在解析...", 100, false));
-            ApplyConfig2(Config2Service.Load(_config2Path), applySpecificToUi: true, requireExactSpecificVersion: true);
+            ApplyConfig(Config3Service.Load(_configPath));
             AppendLog("云端配置解析完成!");
             await progressWindow.DelayCloseAsync(700);
         }
@@ -89,6 +89,7 @@ public partial class MainWindow
         {
             var config = ReadConfigFromUi();
             IniService.Save(_iniPath, config);
+            _currentConfig = config;
             WindowsSystemService.SetAutoRun("RevokeHook", config.Setting.AutoRun, Path.Combine(_baseDirectory, "RevokeInject.exe"));
             AppendLog("已保存微信版本(Ver): " + (string.IsNullOrWhiteSpace(config.Setting.Ver) ? "(空)" : config.Setting.Ver));
             AppendLog("配置已保存到 RevokeHook.ini。");
@@ -99,41 +100,104 @@ public partial class MainWindow
         }
     }
 
-    private async void SearchDelMsgButton_Click(object sender, RoutedEventArgs e)
-    {
-        await SearchSignatureAsync(
-            "DelMsg",
-            DelMsgPatternTextBox.Text,
-            DelMsgResultDeltaTextBox.Text,
-            DelMsgSearchResultTextBox,
-            KeyFuncDelMsgOffsetTextBox);
-    }
-
-    private async void SearchAdd2DBButton_Click(object sender, RoutedEventArgs e)
-    {
-        await SearchSignatureAsync(
-            "Add2DB",
-            Add2DBPatternTextBox.Text,
-            Add2DBResultDeltaTextBox.Text,
-            Add2DBSearchResultTextBox,
-            KeyFuncAdd2DBOffsetTextBox);
-    }
-
     private async void SearchAllButton_Click(object sender, RoutedEventArgs e)
     {
-        await SearchSignatureAsync(
-            "DelMsg",
-            DelMsgPatternTextBox.Text,
-            DelMsgResultDeltaTextBox.Text,
-            DelMsgSearchResultTextBox,
-            KeyFuncDelMsgOffsetTextBox);
+        await SearchCallChainsAsync();
+    }
 
-        await SearchSignatureAsync(
-            "Add2DB",
-            Add2DBPatternTextBox.Text,
-            Add2DBResultDeltaTextBox.Text,
-            Add2DBSearchResultTextBox,
-            KeyFuncAdd2DBOffsetTextBox);
+    private async Task SearchCallChainsAsync()
+    {
+        try
+        {
+            var wechatDllPath = ResolveWeChatDllPath();
+            if (string.IsNullOrWhiteSpace(wechatDllPath))
+            {
+                AppendLog("已取消搜索。");
+                return;
+            }
+
+            DeleteMessagesChainTextBox.Text = string.Empty;
+            AddMessageToDbChainTextBox.Text = string.Empty;
+            KeyFuncDelMsgOffsetTextBox.Text = string.Empty;
+            KeyFuncAdd2DBOffsetTextBox.Text = string.Empty;
+            UpdateSearchProgress(new CallChainSearchProgress(0, "准备搜索..."));
+
+            ToggleTopButtons(false);
+            AppendLog("开始搜索字符串引用与调用链: " + wechatDllPath);
+
+            var request = new CallChainSearchRequest(
+                Signature1TextBox.Text,
+                Signature2TextBox.Text,
+                Signature3TextBox.Text);
+            var progress = new Progress<CallChainSearchProgress>(UpdateSearchProgress);
+
+            var result = await Task.Run(() => CallChainSearchService.Search(wechatDllPath, request, progress));
+            ApplySearchResult(result);
+        }
+        catch (Exception ex)
+        {
+            AppendLog("搜索失败: " + ex.Message);
+            UpdateSearchProgress(new CallChainSearchProgress(0, "搜索失败"));
+        }
+        finally
+        {
+            ToggleTopButtons(true);
+        }
+    }
+
+    private void ApplySearchResult(CallChainSearchResult result)
+    {
+        foreach (var candidateCount in result.CandidateCounts)
+        {
+            AppendLog($"{candidateCount.Key} 候选函数数量: {candidateCount.Value}" + (candidateCount.Value != 1 ? ", 注意候选函数数量不唯一" : ""));
+        }
+
+        AppendLocatedFunction(result.OriginFunction);
+        AppendLocatedFunction(result.DeleteMessagesFunction);
+        AppendLocatedFunction(result.AddMessageToDbFunction);
+
+        if (!result.UsedNativeCapstone)
+        {
+            AppendLog("未加载到原生 capstone.dll, 已使用内置 lea/call 解析降级输出。");
+        }
+
+        if (result.DeleteMessagesChain is not null)
+        {
+            KeyFuncDelMsgOffsetTextBox.Text = NumericParser.FormatHexUnchecked(result.DeleteMessagesChain.RootCallRva);
+            DeleteMessagesChainTextBox.Text = result.DeleteMessagesChain.Format();
+            AppendLog("DeleteMessages 调用链已搜索完毕");
+            // AppendLog(result.DeleteMessagesChain.Format());
+        }
+        else
+        {
+            AppendLog("未在三层调用深度内找到 DeleteMessages 调用链。");
+        }
+
+        if (result.AddMessageToDbChain is not null)
+        {
+            KeyFuncAdd2DBOffsetTextBox.Text = NumericParser.FormatHexUnchecked(result.AddMessageToDbChain.TargetCallRva);
+            AddMessageToDbChainTextBox.Text = result.AddMessageToDbChain.Format();
+            AppendLog("CoAddMessageToDB 调用链已搜索完毕");
+            // AppendLog(result.AddMessageToDbChain.Format());
+        }
+        else
+        {
+            AppendLog("未在三层调用深度内找到 CoAddMessageToDB 调用链。");
+        }
+
+        AppendLog("搜索完成, 结果已回填到偏移框。");
+    }
+
+    private void AppendLocatedFunction(LocatedFunction function)
+    {
+        AppendLog(
+            $"{function.Name}: stringFile={NumericParser.FormatHexUnchecked(function.StringFileOffset)}, stringRVA={NumericParser.FormatHexUnchecked(function.StringRva)}, leaFile={NumericParser.FormatHexUnchecked(function.LeaFileOffset)}, leaRVA={NumericParser.FormatHexUnchecked(function.LeaRva)}, funcRVA={NumericParser.FormatHexUnchecked(function.FunctionRva)}, insn={function.LeaInstructionText}");
+    }
+
+    private void UpdateSearchProgress(CallChainSearchProgress progress)
+    {
+        SearchProgressBar.Value = Math.Clamp(progress.Percent, 0, 100);
+        SearchProgressTextBlock.Text = progress.Message;
     }
 
     private void CreateLinkButton_Click(object sender, RoutedEventArgs e)
@@ -227,6 +291,7 @@ public partial class MainWindow
         try
         {
             var config = IniService.Load(_iniPath);
+            _currentConfig = config;
             LoadConfigToUi(config);
             AppendLog("已从 ini 加载本地配置。");
         }
@@ -236,200 +301,40 @@ public partial class MainWindow
         }
     }
 
-    private void LoadLocalConfig2Configuration()
+    private void LoadLocalConfigConfiguration()
     {
-        if (!File.Exists(_config2Path))
+        if (!File.Exists(_configPath))
         {
-            AppendLog("未找到 Config2.json, 特征码区域保持当前内容。");
+            AppendLog("未找到 Config3.json, 特征码区域保持当前内容。");
             return;
         }
 
         try
         {
-            ApplyConfig2(Config2Service.Load(_config2Path), applySpecificToUi: false, showStartupTip: true);
-            AppendLog("已从 Config2.json 读取特征码信息。");
+            ApplyConfig(Config3Service.Load(_configPath));
+            AppendLog("已从 Config3.json 读取特征码信息。");
         }
         catch (Exception ex)
         {
-            AppendLog("解析 Config2.json 失败: " + ex.Message);
+            AppendLog("解析 Config3.json 失败: " + ex.Message);
         }
     }
 
-    private void ApplyConfig2(
-        Config2File config2,
-        bool applySpecificToUi,
-        bool showStartupTip = false,
-        bool requireExactSpecificVersion = false)
+    private void ApplyConfig(Config3File config3)
     {
         var lookupVersion = _currentWechatVersion ?? _installedVersion;
 
-        if (Config2Service.TryGetGeneral(config2, lookupVersion, out var generalVersion, out var generalEntry))
+        if (Config3Service.TryGet(config3, lookupVersion, out var configVersion, out var entry))
         {
-            DelMsgPatternTextBox.Text = generalEntry.Sig1 ?? string.Empty;
-            Add2DBPatternTextBox.Text = generalEntry.Sig2 ?? string.Empty;
-            DelMsgResultDeltaTextBox.Text = generalEntry.Sig1Delta ?? "0x0";
-            Add2DBResultDeltaTextBox.Text = generalEntry.Sig2Delta ?? "0x0";
+            Signature1TextBox.Text = entry.Sig1 ?? string.Empty;
+            Signature2TextBox.Text = entry.Sig2 ?? string.Empty;
+            Signature3TextBox.Text = entry.Sig3 ?? string.Empty;
 
-            AppendLog("已选择 通用 版本特征: " + generalVersion);
-            ShowGeneralTipIfNeeded(generalEntry, generalVersion, showStartupTip);
-
-            if (applySpecificToUi)
-            {
-                ApplyGeneralArgsToUi(generalEntry);
-            }
+            AppendLog("已选择版本特征: " + configVersion);
         }
         else
         {
-            AppendLog("Config2.json 中没有可用的 通用 数据。");
-        }
-
-        if (!applySpecificToUi)
-        {
-            return;
-        }
-
-        if (requireExactSpecificVersion && !string.IsNullOrWhiteSpace(lookupVersion))
-        {
-            if (!Config2Service.TryGetExactSpecific(config2, lookupVersion, out _, out _))
-            {
-                const string tipMessage = "云端配置中不存在与本地版本相等的配置, 请使用'搜索全部'";
-                AppendLog(tipMessage);
-                MessageBox.Show(this, tipMessage, "云端配置", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-        }
-
-        if (Config2Service.TryGetSpecific(config2, lookupVersion, out var specificVersion, out var specificEntry))
-        {
-            AppendLog("已选择 特定 版本特征: " + specificVersion);
-            ApplySpecificConfigToUi(specificEntry);
-
-            if (specificEntry.DelMsg is null)
-            {
-                AppendLog("特定版本缺少 DelMsg 字段, 已回退使用通用参数。");
-            }
-
-            if (specificEntry.Add2DB is null)
-            {
-                AppendLog("特定版本缺少 Add2DB 字段, 已回退使用通用参数。");
-            }
-
-            return;
-        }
-
-        AppendLog("云端配置没有命中 特定 版本, 已仅回填 通用 搜索参数。");
-    }
-
-    private void ShowGeneralTipIfNeeded(Config2GeneralEntry generalEntry, string version, bool showStartupTip)
-    {
-        if (string.IsNullOrWhiteSpace(generalEntry.Tips))
-        {
-            return;
-        }
-
-        var tip = generalEntry.Tips.Trim();
-        if (string.Equals(_displayedConfigTip, tip, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        _displayedConfigTip = tip;
-        AppendLog("========== 提示 ==========");
-        AppendLog($"[Config2 {version}] {tip}");
-        AppendLog("==============================");
-
-        if (!showStartupTip)
-        {
-            return;
-        }
-
-        if (tip.StartsWith("[!]")) {
-            MessageBox.Show(
-                this,
-                tip,
-                $"Config2 重要提示 - {version}",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-        }
-    }
-
-    private void ApplyGeneralArgsToUi(Config2GeneralEntry generalEntry)
-    {
-        DelMsgArgMsgIndexTextBox.Text = generalEntry.Sig1ArgMsgIndex ?? DelMsgArgMsgIndexTextBox.Text;
-        DelMsgOffsetRevokeXmlTextBox.Text = generalEntry.Sig1OffsetRevokeXml ?? DelMsgOffsetRevokeXmlTextBox.Text;
-
-        Add2DBArgMsgIndexTextBox.Text = generalEntry.Sig2ArgMsgIndex ?? Add2DBArgMsgIndexTextBox.Text;
-        Add2DBArgBoolIndexTextBox.Text = generalEntry.Sig2ArgBoolIndex ?? Add2DBArgBoolIndexTextBox.Text;
-        Add2DBOffsetRevokeXmlTextBox.Text = generalEntry.Sig2OffsetRevokeXml ?? Add2DBOffsetRevokeXmlTextBox.Text;
-        Add2DBOffsetSrvIdTextBox.Text = generalEntry.Sig2OffsetSrvId ?? Add2DBOffsetSrvIdTextBox.Text;
-    }
-
-    private void ApplySpecificConfigToUi(Config2SpecificEntry specificEntry)
-    {
-        if (specificEntry.KeyFunc is not null)
-        {
-            KeyFuncDelMsgOffsetTextBox.Text = specificEntry.KeyFunc.DelMsgOffset ?? KeyFuncDelMsgOffsetTextBox.Text;
-            KeyFuncAdd2DBOffsetTextBox.Text = specificEntry.KeyFunc.Add2DBOffset ?? KeyFuncAdd2DBOffsetTextBox.Text;
-        }
-
-        if (specificEntry.DelMsg is not null)
-        {
-            DelMsgArgMsgIndexTextBox.Text = specificEntry.DelMsg.ArgMsgIndex ?? DelMsgArgMsgIndexTextBox.Text;
-            DelMsgOffsetRevokeXmlTextBox.Text = specificEntry.DelMsg.OffsetRevokeXml ?? DelMsgOffsetRevokeXmlTextBox.Text;
-        }
-
-        if (specificEntry.Add2DB is not null)
-        {
-            Add2DBArgMsgIndexTextBox.Text = specificEntry.Add2DB.ArgMsgIndex ?? Add2DBArgMsgIndexTextBox.Text;
-            Add2DBArgBoolIndexTextBox.Text = specificEntry.Add2DB.ArgBoolIndex ?? Add2DBArgBoolIndexTextBox.Text;
-            Add2DBOffsetRevokeXmlTextBox.Text = specificEntry.Add2DB.OffsetRevokeXml ?? Add2DBOffsetRevokeXmlTextBox.Text;
-            Add2DBOffsetSrvIdTextBox.Text = specificEntry.Add2DB.OffsetSrvId ?? Add2DBOffsetSrvIdTextBox.Text;
-        }
-    }
-
-    private async Task SearchSignatureAsync(
-        string name,
-        string patternText,
-        string deltaText,
-        System.Windows.Controls.TextBox resultTextBox,
-        System.Windows.Controls.TextBox targetOffsetTextBox)
-    {
-        try
-        {
-            var wechatDllPath = ResolveWeChatDllPath();
-            if (string.IsNullOrWhiteSpace(wechatDllPath))
-            {
-                AppendLog("已取消搜索 " + name + "。");
-                return;
-            }
-
-            var delta = NumericParser.ParseInt(deltaText);
-            AppendLog($"开始搜索 {name} 特征码, 结果偏移: {NumericParser.FormatHex(delta)}");
-
-            var result = await Task.Run(() => SignatureSearchService.Search(wechatDllPath, patternText, delta));
-            if (result.Matches.Count == 0)
-            {
-                resultTextBox.Text = string.Empty;
-                AppendLog($"{name} 未找到匹配结果。");
-                return;
-            }
-
-            for (var index = 0; index < result.Matches.Count; index++)
-            {
-                var match = result.Matches[index];
-                AppendLog(
-                    $"[{name}] 命中 {index}: RVA={NumericParser.FormatHex(match.BaseOffset)} 调整后={NumericParser.FormatHex(match.AdjustedOffset)} 预览={match.PreviewHex}");
-            }
-
-            var first = result.Matches[0];
-            var formattedOffset = NumericParser.FormatHex(first.AdjustedOffset);
-            resultTextBox.Text = first.PreviewHex;
-            targetOffsetTextBox.Text = formattedOffset;
-            AppendLog($"{name} 搜索完成, 已回填偏移: {formattedOffset}");
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"搜索 {name} 失败: {ex.Message}");
+            AppendLog("Config3.json 中没有可用的特征码数据。");
         }
     }
 
@@ -479,14 +384,6 @@ public partial class MainWindow
         KeyFuncDelMsgOffsetTextBox.Text = NumericParser.FormatCompact(config.KeyFunc.DelMsgOffset);
         KeyFuncAdd2DBOffsetTextBox.Text = NumericParser.FormatCompact(config.KeyFunc.Add2DBOffset);
 
-        DelMsgArgMsgIndexTextBox.Text = NumericParser.FormatCompact(config.DelMsg.ArgMsgIndex);
-        DelMsgOffsetRevokeXmlTextBox.Text = NumericParser.FormatCompact(config.DelMsg.OffsetRevokeXML);
-
-        Add2DBArgMsgIndexTextBox.Text = NumericParser.FormatCompact(config.Add2DB.ArgMsgIndex);
-        Add2DBArgBoolIndexTextBox.Text = NumericParser.FormatCompact(config.Add2DB.ArgBoolIndex);
-        Add2DBOffsetRevokeXmlTextBox.Text = NumericParser.FormatCompact(config.Add2DB.OffsetRevokeXML);
-        Add2DBOffsetSrvIdTextBox.Text = NumericParser.FormatCompact(config.Add2DB.OffsetSrvID);
-
         AutoRunCheckBox.IsChecked = config.Setting.AutoRun;
         OutputDebugMsgCheckBox.IsChecked = config.Setting.OutputDebugMsg;
         OverTipCheckBox.IsChecked = config.Setting.OverTip;
@@ -495,34 +392,21 @@ public partial class MainWindow
 
     private RevokeHookConfig ReadConfigFromUi()
     {
-        return new RevokeHookConfig
+        _currentConfig.KeyFunc = new KeyFuncSection
         {
-            KeyFunc = new KeyFuncSection
-            {
-                DelMsgOffset = NumericParser.ParseInt(KeyFuncDelMsgOffsetTextBox.Text),
-                Add2DBOffset = NumericParser.ParseInt(KeyFuncAdd2DBOffsetTextBox.Text)
-            },
-            DelMsg = new DelMsgSection
-            {
-                ArgMsgIndex = NumericParser.ParseInt(DelMsgArgMsgIndexTextBox.Text),
-                OffsetRevokeXML = NumericParser.ParseInt(DelMsgOffsetRevokeXmlTextBox.Text)
-            },
-            Add2DB = new Add2DbSection
-            {
-                ArgMsgIndex = NumericParser.ParseInt(Add2DBArgMsgIndexTextBox.Text),
-                ArgBoolIndex = NumericParser.ParseInt(Add2DBArgBoolIndexTextBox.Text),
-                OffsetRevokeXML = NumericParser.ParseInt(Add2DBOffsetRevokeXmlTextBox.Text),
-                OffsetSrvID = NumericParser.ParseInt(Add2DBOffsetSrvIdTextBox.Text)
-            },
-            Setting = new SettingSection
-            {
-                AutoRun = AutoRunCheckBox.IsChecked == true,
-                OutputDebugMsg = OutputDebugMsgCheckBox.IsChecked == true,
-                OverTip = OverTipCheckBox.IsChecked == true,
-                AntiRevokeSelf = AntiRevokeSelfCheckBox.IsChecked == true,
-                Ver = _currentWechatVersion ?? string.Empty
-            }
+            DelMsgOffset = NumericParser.ParseInt(KeyFuncDelMsgOffsetTextBox.Text),
+            Add2DBOffset = NumericParser.ParseInt(KeyFuncAdd2DBOffsetTextBox.Text)
         };
+        _currentConfig.Setting = new SettingSection
+        {
+            AutoRun = AutoRunCheckBox.IsChecked == true,
+            OutputDebugMsg = OutputDebugMsgCheckBox.IsChecked == true,
+            OverTip = OverTipCheckBox.IsChecked == true,
+            AntiRevokeSelf = AntiRevokeSelfCheckBox.IsChecked == true,
+            Ver = _currentWechatVersion ?? string.Empty
+        };
+
+        return _currentConfig;
     }
 
     private static string? TryExtractWechatVersionFromDllPath(string dllPath)

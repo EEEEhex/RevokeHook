@@ -45,10 +45,10 @@ public partial class App : Application
         {
             var progress = new Progress<CloudDownloadProgress>(progressWindow.Report);
             await CloudConfigService.DownloadLatestConfigAsync(
-                Path.Combine(AppContext.BaseDirectory, "Config2.json"),
+                Path.Combine(AppContext.BaseDirectory, "Config3.json"),
                 progress);
 
-            progressWindow.Report(new CloudDownloadProgress("最新 Config2.json 下载完成。", 100, false));
+            progressWindow.Report(new CloudDownloadProgress("最新 Config3.json 下载完成。", 100, false));
             await progressWindow.DelayCloseAsync(800);
             Shutdown(0);
         }
