@@ -1,7 +1,7 @@
 # RevokeHook
 QT版微信4.0 防撤回 + 提醒, 请在[Discussions](https://github.com/EEEEhex/RevokeHook/discussions/12)处反馈使用过程中出现的警告等问题  
 
-Linux版说明: [RevokeHook Linux](Linux\README.md)
+Linux版说明: [RevokeHook Linux](Linux/README.md)
 
 ## 原理
 文章: [微信4.0防撤回+提醒 (符号恢复+字符串解密)](https://bbs.kanxue.com/thread-286611.htm)
