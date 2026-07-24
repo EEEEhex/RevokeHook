@@ -1,0 +1,173 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ==========================================================================
+  # Windows 构建：RevokeHook.dll (C++) + RevokeHookUI (WPF) + OffsetFinder
+  # ==========================================================================
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      # --- C++ DLL ---
+      - name: Restore NuGet (C++)
+        run: nuget restore RevokeHook\RevokeHook.sln
+
+      - name: Build RevokeHook.dll (C++, Release x64)
+        run: >
+          msbuild RevokeHook\RevokeHook.sln
+          /p:Configuration=Release
+          /p:Platform=x64
+          /t:Build
+          /m
+
+      # --- RevokeHookUI (WPF) ---
+      - name: Restore NuGet (RevokeHookUI)
+        run: dotnet restore RevokeHookUI\RevokeHookUI.sln
+
+      - name: Publish RevokeHookUI (win-x64, self-contained)
+        run: >
+          dotnet publish RevokeHookUI\RevokeHookUI\RevokeHookUI.csproj
+          -c Release
+          -r win-x64
+          --self-contained
+          -p:PublishSingleFile=false
+          -o publish\RevokeHookUI
+
+      - name: Copy RevokeHook.dll into RevokeHookUI
+        run: |
+          if (Test-Path "RevokeHook\x64\Release\RevokeHook.dll") {
+            Copy-Item "RevokeHook\x64\Release\RevokeHook.dll" "publish\RevokeHookUI\"
+          }
+
+      # --- OffsetFinder ---
+      - name: Restore NuGet (OffsetFinder)
+        run: dotnet restore OffsetFinder\OffsetFinder.csproj
+
+      - name: Publish OffsetFinder (win-x64, self-contained)
+        run: >
+          dotnet publish OffsetFinder\OffsetFinder.csproj
+          -c Release
+          -r win-x64
+          --self-contained
+          -p:PublishSingleFile=false
+          -o publish\OffsetFinder
+
+      - name: Copy RevokeHook.dll into OffsetFinder
+        run: |
+          if (Test-Path "RevokeHook\x64\Release\RevokeHook.dll") {
+            Copy-Item "RevokeHook\x64\Release\RevokeHook.dll" "publish\OffsetFinder\"
+          }
+
+      # --- 上传构建产物 ---
+      - name: Upload RevokeHookUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RevokeHookUI-Windows-x64
+          path: publish\RevokeHookUI\
+
+      - name: Upload OffsetFinder artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OffsetFinder-Windows-x64
+          path: publish\OffsetFinder\
+
+  # ==========================================================================
+  # Linux 构建：injector_so + RevokeHookTUI (Terminal.Gui)
+  # ==========================================================================
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+
+      # --- C 注入器 + SO ---
+      - name: Build injector_so (C)
+        run: make -C Linux/injector_so
+
+      # --- RevokeHookTUI ---
+      - name: Restore NuGet (RevokeHookTUI)
+        run: dotnet restore Linux/RevokeHookTUI/RevokeHookTUI.sln
+
+      - name: Publish RevokeHookTUI (linux-x64, self-contained)
+        run: >
+          dotnet publish Linux/RevokeHookTUI/RevokeHookTUI/RevokeHookTUI.csproj
+          -c Release
+          -r linux-x64
+          --self-contained
+          -p:PublishSingleFile=false
+          -o publish/RevokeHookTUI
+
+      - name: Copy injector + librevokehook.so into output
+        run: |
+          cp Linux/injector_so/injector        publish/RevokeHookTUI/
+          cp Linux/injector_so/librevokehook.so publish/RevokeHookTUI/
+
+      # --- 上传构建产物 ---
+      - name: Upload RevokeHookTUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RevokeHookTUI-Linux-x64
+          path: publish/RevokeHookTUI/
+
+  # ==========================================================================
+  # GitHub Release（仅 tag 推送时触发）
+  # ==========================================================================
+  create-release:
+    needs: [build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Package artifacts as zip
+        run: |
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            zip -r "${name}.zip" "$name"
+          done
+          ls -lh *.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

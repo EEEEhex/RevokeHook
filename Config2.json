@@ -117,6 +117,14 @@
         "OffsetRevokeXML": "0x180",
         "OffsetSrvID": "0x148"
       }
+    },
+    "4.1.12.22": {
+      "_comment": "TODO: 需要逆向工程获取偏移。使用 RevokeHookUI 搜索或 IDA 手动分析。",
+      "_instructions": "1. 运行 RevokeHookUI → 点击'搜索'按钮使用 Config3.json 特征码自动搜索; 2. 若搜索不到, 使用 IDA Pro 打开 Weixin.dll 手动定位函数",
+      "KeyFunc": {
+        "DelMsgOffset": "0x0",
+        "Add2DBOffset": "0x0"
+      }
     }
   }
 }
