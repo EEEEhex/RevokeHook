@@ -1,8 +1,10 @@
 # 编译产物
 **/bin/
 **/obj/
-Linux/injector_so/injector
-Linux/injector_so/librevokehook.so
+src/hook/injector
+src/hook/librevokehook.so
+src/hook/libsigbp.so
+src/injector/injector
 __pycache__/
 *.pyc
 
