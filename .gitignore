@@ -1,0 +1,10 @@
+# 编译产物
+**/bin/
+**/obj/
+Linux/injector_so/injector
+Linux/injector_so/librevokehook.so
+__pycache__/
+*.pyc
+
+# 临时文件
+.temp/
