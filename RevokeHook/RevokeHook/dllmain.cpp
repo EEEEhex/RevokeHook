@@ -10,6 +10,8 @@
 #include <algorithm>
 
 #include "vehbp.h"
+#include "add2db_args.h"
+#include "message_notification.h"
 
 //用于读取ini配置
 #include "inicpp.h" 
@@ -23,6 +25,14 @@ static HANDLE g_hLogFile = INVALID_HANDLE_VALUE;
 //VEH + INT3断点
 static void* g_bpDelMsg = nullptr;
 static void* g_bpAdd2DB = nullptr;
+static void* g_bpPostAdd2DB = nullptr;
+static void* g_bpAdd2DBResult = nullptr;
+using MessageAddedSignal = void(__fastcall*)(void*, const revokehook::MessageVectorView*);
+static MessageAddedSignal g_messageAddedSignal = nullptr;
+static bool g_notification_profile_enabled = false;
+static volatile LONG g_notification_dispatch_disabled = 0;
+static SRWLOCK g_notification_lock = SRWLOCK_INIT;
+static revokehook::PendingNotificationTable g_pending_notifications = {};
 
 static DWORD g_tlsThreadState = TLS_OUT_OF_INDEXES;
 struct ThreadState
@@ -106,7 +116,7 @@ struct DELMSGINFO
 struct ADD2DBINFO
 {
     bool initialized;
-    int arg_bool_index;     // 哪个参数是bool标志(值为0的那个)
+    bool insert_flag_callsite_matched; // Only set a flag for a verified call layout.
     int offset_srvid;       // srvid在r8结构体中的偏移
     int offset_revoke_xml;  // revoke_xml StdString在r8结构体中的偏移
 };
@@ -379,6 +389,320 @@ static bool IsMemoryReadable(const void* addr, size_t size)
     return ((uintptr_t)addr + size) <= region_end;
 }
 
+static revokehook::NotificationBytes ReadNotificationProfileBytes(
+    uintptr_t base, uint32_t image_size, uint32_t rva, size_t size)
+{
+    if (rva > image_size || size > image_size - rva ||
+        base > (std::numeric_limits<uintptr_t>::max)() - image_size)
+        return {};
+    const auto* bytes = reinterpret_cast<const uint8_t*>(base + rva);
+    return IsMemoryReadable(bytes, size)
+        ? revokehook::NotificationBytes{ bytes, size }
+        : revokehook::NotificationBytes{};
+}
+
+static bool ReadNotificationImageIdentity(uintptr_t base, uint32_t& timestamp,
+    uint32_t& image_size)
+{
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (!IsMemoryReadable(dos, sizeof(*dos)) || dos->e_magic != IMAGE_DOS_SIGNATURE ||
+        dos->e_lfanew < static_cast<LONG>(sizeof(*dos)) || dos->e_lfanew > 0x10000)
+        return false;
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    if (!IsMemoryReadable(nt, sizeof(*nt)) || nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        return false;
+    timestamp = nt->FileHeader.TimeDateStamp;
+    image_size = nt->OptionalHeader.SizeOfImage;
+    return true;
+}
+
+static void InitMessageNotificationProfile()
+{
+    g_notification_profile_enabled = false;
+    g_bpPostAdd2DB = nullptr;
+    g_bpAdd2DBResult = nullptr;
+    g_messageAddedSignal = nullptr;
+    const auto base = static_cast<uintptr_t>(g_config_info.basic_info.imgbase);
+    revokehook::NotificationProfileView profile = {};
+    if (g_config_info.add2db_info.insert_flag_callsite_matched &&
+        ReadNotificationImageIdentity(base, profile.timestamp, profile.image_size))
+    {
+        profile.delete_call_rva = g_config_info.basic_info.delmsg_offset;
+        profile.add_call_rva = g_config_info.basic_info.add2db_offset;
+        profile.delete_call = ReadNotificationProfileBytes(base, profile.image_size,
+            revokehook::kNotifyDeleteWindowRva, sizeof(revokehook::kNotifyDeleteBytes));
+        profile.add_call = ReadNotificationProfileBytes(base, profile.image_size,
+            revokehook::kNotifyAddCallRva - revokehook::kAdd2DbCallPrefixSize,
+            sizeof(revokehook::kNotifyAddBytes));
+        profile.post_call = ReadNotificationProfileBytes(base, profile.image_size,
+            revokehook::kNotifyPostWindowRva, sizeof(revokehook::kNotifyPostBytes));
+        profile.signal_entry = ReadNotificationProfileBytes(base, profile.image_size,
+            revokehook::kNotifySignalRva, sizeof(revokehook::kNotifySignalBytes));
+        profile.worker_result = ReadNotificationProfileBytes(base, profile.image_size,
+            revokehook::kNotifyWorkerWindowRva, sizeof(revokehook::kNotifyWorkerBytes));
+        if (revokehook::MatchesNotificationProfile(profile))
+        {
+            g_bpPostAdd2DB = reinterpret_cast<void*>(base + revokehook::kNotifyPostRva);
+            g_bpAdd2DBResult = reinterpret_cast<void*>(base + revokehook::kNotifyWorkerResultRva);
+            g_messageAddedSignal = reinterpret_cast<MessageAddedSignal>(
+                base + revokehook::kNotifySignalRva);
+            OutputDebugPrintf("[RevokeHook] Message notification profile verified (4.1.15.50)");
+            return;
+        }
+    }
+    OutputDebugStringA("[RevokeHook] Message notification disabled: unsupported image or call layout.");
+    OutputDebugPrintf("[RevokeHook] Message notification profile not matched; no notification hook");
+}
+
+static bool HasRevokeXml(const StdString* text)
+{
+    if (!IsMemoryReadable(text, sizeof(*text)) || text->size <= 0 ||
+        text->size > 0x10000 || text->capability < text->size || text->capability > 0x100000)
+        return false;
+    const char* data = text->data_ptr;
+    if (text->capability >= sizeof(text->data_ptr))
+        memcpy(&data, text->data_ptr, sizeof(data));
+    return IsMemoryReadable(data, static_cast<size_t>(text->size)) &&
+        revokehook::ContainsRevokeXml(data, static_cast<size_t>(text->size));
+}
+
+static bool ReadNotificationMessage(uintptr_t message, uint32_t& local_id,
+    uint32_t& message_type, bool& has_revoke_xml)
+{
+    if (!g_config_info.add2db_info.initialized ||
+        !IsMemoryReadable(reinterpret_cast<void*>(message), revokehook::kNotifyMessageSize))
+        return false;
+    const int xml_offset = g_config_info.add2db_info.offset_revoke_xml;
+    if (xml_offset < 0 || static_cast<size_t>(xml_offset) >
+        revokehook::kNotifyMessageSize - sizeof(StdString))
+        return false;
+    memcpy(&local_id, reinterpret_cast<void*>(message + revokehook::kNotifyLocalIdOffset),
+        sizeof(local_id));
+    memcpy(&message_type, reinterpret_cast<void*>(message + revokehook::kNotifyMessageTypeOffset),
+        sizeof(message_type));
+    has_revoke_xml = HasRevokeXml(reinterpret_cast<const StdString*>(message + xml_offset));
+    return true;
+}
+
+static void ClearNotificationForFrame(PCONTEXT ctx)
+{
+    AcquireSRWLockExclusive(&g_notification_lock);
+    revokehook::ClearNotificationFrame(g_pending_notifications, ctx->Rbp, ctx->Rsp);
+    ReleaseSRWLockExclusive(&g_notification_lock);
+}
+
+static void CaptureNotificationForFrame(PCONTEXT ctx)
+{
+    const auto now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_notification_lock);
+    const auto result = revokehook::CapturePendingNotification(g_pending_notifications,
+        ctx->Rcx, ctx->Rbp, ctx->Rsp, now);
+    ReleaseSRWLockExclusive(&g_notification_lock);
+    if (result == revokehook::CaptureNotificationResult::Full)
+        OutputDebugPrintf("[RevokeHook] Notification table full; skip this notification");
+    else if (result != revokehook::CaptureNotificationResult::Captured)
+        OutputDebugPrintf("[RevokeHook] Notification frame rejected");
+}
+
+static bool FindNotificationForMessage(uintptr_t message,
+    revokehook::PendingNotification& snapshot)
+{
+    const auto now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_notification_lock);
+    const bool found = revokehook::FindPendingNotification(
+        g_pending_notifications, message, now, snapshot);
+    ReleaseSRWLockExclusive(&g_notification_lock);
+    return found;
+}
+
+static void ArmNotificationForMessage(const revokehook::PendingNotification& snapshot,
+    uint32_t previous_local_id, const uint8_t* random_srvid)
+{
+    const auto now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_notification_lock);
+    const bool armed = revokehook::ArmPendingNotification(
+        g_pending_notifications, snapshot, previous_local_id,
+        g_config_info.add2db_info.offset_srvid, random_srvid, now);
+    ReleaseSRWLockExclusive(&g_notification_lock);
+    OutputDebugPrintf(armed ? "[Debug] Message notification armed" :
+        "[Debug] Message notification not armed (layout, expiry, replacement, or duplicate)");
+}
+
+static void RecordInsertedMessageResult(PCONTEXT ctx)
+{
+    if (ctx->Rbp < revokehook::kNotifyWorkerFrameMessageOffset ||
+        g_config_info.add2db_info.offset_srvid != revokehook::kNotifySrvIdOffset)
+        return;
+    const uintptr_t message = ctx->Rbp - revokehook::kNotifyWorkerFrameMessageOffset;
+    uint32_t local_id = 0, message_type = 0;
+    bool has_revoke_xml = false;
+    if (!ReadNotificationMessage(message, local_id, message_type, has_revoke_xml) ||
+        message_type != revokehook::kNotifySystemMessageType || !has_revoke_xml)
+        return;
+    uint8_t random_srvid[8] = {};
+    memcpy(random_srvid, reinterpret_cast<void*>(message + revokehook::kNotifySrvIdOffset),
+        sizeof(random_srvid));
+    const bool succeeded = (ctx->Rax & 0xFF) != 0;
+    const auto now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_notification_lock);
+    const auto result = revokehook::RecordNotificationCommit(g_pending_notifications,
+        random_srvid, succeeded, local_id, now);
+    ReleaseSRWLockExclusive(&g_notification_lock);
+    if (result == revokehook::CommitNotificationResult::Recorded)
+        OutputDebugPrintf(succeeded ? "[Debug] Message transaction success observed" :
+            "[Debug] Message transaction failure observed; no notification");
+    else if (result == revokehook::CommitNotificationResult::Ambiguous)
+        OutputDebugPrintf("[RevokeHook] Ambiguous notification token; notification rejected");
+}
+
+static bool InvokeMessageAddedSignal(void* signal, const revokehook::MessageVectorView* view)
+{
+    __try
+    {
+        g_messageAddedSignal(signal, view);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static void NotifyStoredMessage(PCONTEXT ctx)
+{
+    revokehook::NotificationRequest request = {};
+    const auto now = GetTickCount64();
+    AcquireSRWLockExclusive(&g_notification_lock);
+    const bool taken = revokehook::TakePendingNotification(g_pending_notifications,
+        ctx->Rbp, ctx->Rsp, now, request);
+    ReleaseSRWLockExclusive(&g_notification_lock);
+    if (!taken || InterlockedCompareExchange(&g_notification_dispatch_disabled, 0, 0) != 0)
+        return;
+
+    // No table lock is held while inspecting the message or calling subscribers.
+    uint32_t local_id = 0, message_type = 0;
+    bool has_revoke_xml = false;
+    if (!ReadNotificationMessage(request.message, local_id, message_type, has_revoke_xml))
+    {
+        OutputDebugPrintf("[Debug] Notification skipped: message unavailable");
+        return;
+    }
+    uint8_t random_srvid[8] = {};
+    memcpy(random_srvid, reinterpret_cast<void*>(request.message + revokehook::kNotifySrvIdOffset),
+        sizeof(random_srvid));
+    if (!revokehook::IsStoredRevokeNotification(request, local_id, message_type,
+        has_revoke_xml, random_srvid))
+    {
+        OutputDebugPrintf("[Debug] Notification skipped: transaction, identity, or XML not verified");
+        return;
+    }
+    if (ctx->Rbp > (std::numeric_limits<uintptr_t>::max)() -
+        revokehook::kNotifyFrameManagerOffset - sizeof(uintptr_t))
+        return;
+    const auto* manager_slot = reinterpret_cast<const uintptr_t*>(
+        ctx->Rbp + revokehook::kNotifyFrameManagerOffset);
+    uintptr_t current_manager = 0;
+    if (!IsMemoryReadable(manager_slot, sizeof(*manager_slot)))
+        return;
+    memcpy(&current_manager, manager_slot, sizeof(current_manager));
+    if (!revokehook::MatchesNotificationManager(request, current_manager))
+    {
+        OutputDebugPrintf("[Debug] Notification skipped: manager strong reference changed");
+        return;
+    }
+    auto* signal = reinterpret_cast<uint8_t*>(request.manager + revokehook::kNotifySignalOffset);
+    if (!IsMemoryReadable(signal, 2 * sizeof(void*)))
+    {
+        OutputDebugPrintf("[Debug] Notification skipped: manager signal unavailable");
+        return;
+    }
+    void* signal_state = nullptr;
+    memcpy(&signal_state, signal + sizeof(void*), sizeof(signal_state));
+    if (!IsMemoryReadable(signal_state, sizeof(void*)))
+    {
+        OutputDebugPrintf("[Debug] Notification skipped: signal state unavailable");
+        return;
+    }
+    revokehook::MessageVectorView view = {};
+    if (!revokehook::BuildMessageVectorView(request.message, view) ||
+        g_messageAddedSignal == nullptr)
+        return;
+    const bool delivered = InvokeMessageAddedSignal(signal, &view);
+    if (delivered)
+        OutputDebugPrintf("[Debug] Added-message signal dispatched");
+    else
+    {
+        InterlockedExchange(&g_notification_dispatch_disabled, 1);
+        OutputDebugStringA("[RevokeHook] Added-message signal raised an exception; further notifications disabled. Core hooks remain active.");
+        OutputDebugPrintf("[RevokeHook] Added-message signal exception; subsequent dispatch disabled");
+    }
+}
+
+static void InstallMessageNotificationBreakpoints(BpCallback callback)
+{
+    if (g_bpPostAdd2DB == nullptr || g_bpAdd2DBResult == nullptr || g_messageAddedSignal == nullptr)
+        return;
+    const int post_handle = VehBp_Set(g_bpPostAdd2DB, callback);
+    const int result_handle = post_handle == -1 ? -1 : VehBp_Set(g_bpAdd2DBResult, callback);
+    if (post_handle == -1 || result_handle == -1)
+    {
+        if (post_handle != -1)
+            VehBp_Remove(post_handle);
+        if (result_handle != -1)
+            VehBp_Remove(result_handle);
+        g_bpPostAdd2DB = nullptr;
+        g_bpAdd2DBResult = nullptr;
+        g_messageAddedSignal = nullptr;
+        OutputDebugPrintf("[RevokeHook] Notification breakpoints unavailable; core hooks retained");
+        return;
+    }
+    g_notification_profile_enabled = true;
+    OutputDebugPrintf("[RevokeHook] Transaction-result and post-insert notification hooks enabled");
+}
+
+static void InitAdd2DbArgumentLayout(const void* call_address)
+{
+    auto& info = g_config_info.add2db_info;
+    info.insert_flag_callsite_matched = false;
+    const uintptr_t address = reinterpret_cast<uintptr_t>(call_address);
+    if (address >= revokehook::kAdd2DbCallPrefixSize)
+    {
+        const auto* window = reinterpret_cast<const uint8_t*>(
+            address - revokehook::kAdd2DbCallPrefixSize);
+        if (IsMemoryReadable(window, revokehook::kAdd2DbCallWindowSize))
+            info.insert_flag_callsite_matched = revokehook::MatchesKnownAdd2DbCall(
+                window, revokehook::kAdd2DbCallWindowSize);
+    }
+
+    if (info.insert_flag_callsite_matched)
+        OutputDebugPrintf("[RevokeHook] Add2DB arguments: verified byte flag at caller RSP+0x20");
+    else
+    {
+        OutputDebugStringA("[RevokeHook] Unknown Add2DB call layout; argument bytes will be preserved.");
+        OutputDebugPrintf("[RevokeHook] Add2DB arguments: unknown layout, no argument writes");
+    }
+}
+
+static bool TrySetAdd2DbInsertFlag(PCONTEXT ctx)
+{
+    if (ctx == nullptr || !g_config_info.add2db_info.insert_flag_callsite_matched)
+        return false;
+
+    auto* stack = reinterpret_cast<uint8_t*>(ctx->Rsp);
+    auto* flag = stack + revokehook::kAdd2DbInsertFlagStackOffset;
+    MEMORY_BASIC_INFORMATION mbi = {};
+    if (VirtualQuery(flag, &mbi, sizeof(mbi)) == 0 || mbi.State != MEM_COMMIT ||
+        (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) ||
+        !(mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
+            PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+        return false;
+
+    return revokehook::WriteAdd2DbInsertFlag(true, stack,
+        revokehook::kAdd2DbInsertFlagStackOffset + 1);
+}
+
 static StdString* FindStdStringWithSig(uint64_t base_addr, size_t scan_range,
     const uint8_t* sig, size_t sig_len)
 {
@@ -463,6 +787,18 @@ static uint64_t FindSrvId(uint64_t base_addr, size_t scan_limit)
 static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
 {
     uint64_t rip = ctx->Rip;
+    if (g_notification_profile_enabled && rip == reinterpret_cast<uint64_t>(g_bpAdd2DBResult))
+    {
+        RecordInsertedMessageResult(ctx);
+        return;
+    }
+    if (g_notification_profile_enabled && rip == reinterpret_cast<uint64_t>(g_bpPostAdd2DB))
+    {
+        NotifyStoredMessage(ctx);
+        return;
+    }
+    if (g_notification_profile_enabled && rip == reinterpret_cast<uint64_t>(g_bpDelMsg))
+        ClearNotificationForFrame(ctx);
     ThreadState* thread_state = GetThreadState();
     if (thread_state == nullptr) {
         OutputDebugString(TEXT("[RevokeHook] GetThreadState Failed!"));
@@ -556,6 +892,8 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
             OutputDebugPrintf("[Debug] Anti Revoke SELF Msg...");
 
         thread_state->anti_revoke_cur_msg = 1;
+        if (g_notification_profile_enabled && HasRevokeXml(revoke_xml))
+            CaptureNotificationForFrame(ctx);
 
         if (g_config_info.delmsg_info.arg_notify_index > 0)
         {
@@ -568,18 +906,24 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
     }
     else if (rip == (uint64_t)g_bpAdd2DB) 
     {
-		if (thread_state->anti_revoke_cur_msg == 0) return;
+        const uint64_t arg_msg = GetArgValue(ctx, 3);
+        if (!g_config_info.add2db_info.insert_flag_callsite_matched)
+        {
+            OutputDebugPrintf("[Debug] Add2DB skipped: unsupported call layout; message preserved");
+            return;
+        }
+        const bool notification_profile = g_notification_profile_enabled;
+        revokehook::PendingNotification notification_snapshot = {};
+        if (notification_profile)
+        {
+            if (!FindNotificationForMessage(arg_msg, notification_snapshot))
+                return;
+        }
+        else if (thread_state->anti_revoke_cur_msg == 0)
+            return;
 
         if (!g_config_info.add2db_info.initialized)
         {
-            int arg_bool_index = FindZeroArgIndex(ctx, 3, 8);
-            if (arg_bool_index < 0)
-            {
-                OutputDebugPrintf("[Debug] Add2DB: Cannot find arg_bool (0 param)");
-                return;
-            }
-
-            uint64_t arg_msg = GetArgValue(ctx, 3);
             if (arg_msg == 0 || !IsMemoryReadable((void*)arg_msg, 0x100))
             {
                 OutputDebugPrintf("[Debug] Add2DB: arg_msg is invalid");
@@ -608,18 +952,15 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
                 return;
             }
 
-            g_config_info.add2db_info.arg_bool_index = arg_bool_index;
             g_config_info.add2db_info.offset_revoke_xml = xml_offset;
             g_config_info.add2db_info.offset_srvid = (int)(mem_srvid_addr - arg_msg);
             g_config_info.add2db_info.initialized = true;
-            OutputDebugPrintf("[Debug] Add2DB cached: bool_idx=%d, xml_off=0x%X, srvid_off=0x%X",
-                g_config_info.add2db_info.arg_bool_index,
+            OutputDebugPrintf("[Debug] Add2DB cached: xml_off=0x%X, srvid_off=0x%X, flag_layout=%s",
                 g_config_info.add2db_info.offset_revoke_xml,
-                g_config_info.add2db_info.offset_srvid);
+                g_config_info.add2db_info.offset_srvid,
+                g_config_info.add2db_info.insert_flag_callsite_matched ? "verified" : "unknown");
         }
 
-        int arg_bool_index = g_config_info.add2db_info.arg_bool_index;
-        uint64_t arg_msg = GetArgValue(ctx, 3);
         if (arg_msg == 0 || !IsMemoryReadable((void*)arg_msg, 0x100))
         {
             OutputDebugPrintf("[Debug] Add2DB: arg_msg invalid");
@@ -633,10 +974,28 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
             return;
         }
 
+        if (notification_profile &&
+            g_config_info.add2db_info.offset_srvid != revokehook::kNotifySrvIdOffset)
+        {
+            OutputDebugPrintf("[Debug] Add2DB skipped: server ID offset differs from verified profile");
+            return;
+        }
+        uint32_t previous_local_id = 0;
+        if (notification_profile)
+        {
+            uint32_t message_type = 0;
+            bool has_revoke_xml = false;
+            if (!ReadNotificationMessage(arg_msg, previous_local_id, message_type, has_revoke_xml) ||
+                message_type != revokehook::kNotifySystemMessageType || !has_revoke_xml)
+            {
+                OutputDebugPrintf("[Debug] Add2DB notification message rejected (type or XML)");
+                return;
+            }
+        }
         uint64_t mem_srvid_addr = arg_msg + g_config_info.add2db_info.offset_srvid;
 
         uint64_t revoke_xml_str_addr = *((uint64_t*)(revoke_xml->data_ptr));
-        OutputDebugPrintf("[Debug] %p | Revoke XML: %s | bool_idx: %d", revoke_xml, (char*)revoke_xml_str_addr, arg_bool_index);
+        OutputDebugPrintf("[Debug] %p | Revoke XML: %s", revoke_xml, (char*)revoke_xml_str_addr);
 
         uint8_t org_srvid[8] = { 0 };
         memcpy(org_srvid, (void*)mem_srvid_addr, 8);
@@ -683,10 +1042,18 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
             }
         }
 
-        if (SetArgValue(ctx, arg_bool_index, 1))
-            OutputDebugPrintf("[Debug] Set Arg %d to 1", arg_bool_index);
-        else
-            OutputDebugPrintf("[Debug] Set Arg %d Failed!", arg_bool_index);
+        if (g_config_info.add2db_info.insert_flag_callsite_matched)
+        {
+            if (TrySetAdd2DbInsertFlag(ctx))
+            {
+                OutputDebugPrintf("[Debug] Add2DB: set argument 5 low byte to 1");
+                if (notification_profile)
+                    ArmNotificationForMessage(notification_snapshot, previous_local_id,
+                        rand_srvid.data());
+            }
+            else
+                OutputDebugPrintf("[Debug] Add2DB: argument 5 is not writable; preserved");
+        }
     }
 }
 
@@ -747,6 +1114,9 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 
 		g_bpDelMsg = (void*)(g_config_info.basic_info.imgbase + g_config_info.basic_info.delmsg_offset);
 		g_bpAdd2DB = (void*)(g_config_info.basic_info.imgbase + g_config_info.basic_info.add2db_offset);
+        // Inspect the original CALL bytes before VehBp_Set writes INT3.
+        InitAdd2DbArgumentLayout(g_bpAdd2DB);
+        InitMessageNotificationProfile();
 
         if (VehBp_Set(g_bpDelMsg, OnTargetHit) == -1)
             OutputDebugPrintf("[RevokeHook] AddBp %p Error", g_bpDelMsg);
@@ -757,6 +1127,8 @@ BOOL APIENTRY DllMain( HMODULE hModule,
             OutputDebugPrintf("[RevokeHook] AddBp %p Error", g_bpAdd2DB);
         else
             OutputDebugPrintf("[RevokeHook] AddBp %p OK", g_bpAdd2DB);
+
+        InstallMessageNotificationBreakpoints(OnTargetHit);
         break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
