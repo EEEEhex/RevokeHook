@@ -134,6 +134,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="vehbp.h" />
+    <ClInclude Include="add2db_args.h" />
+    <ClInclude Include="message_notification.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="inicpp.h" />
     <ClInclude Include="ReflectiveLoader.h" />
