@@ -12,6 +12,12 @@ public class KeyFuncSection
     public int DelMsgOffset { get; set; }
 
     public int Add2DBOffset { get; set; }
+
+    public int NotifyOneMessageAddedOffset { get; set; }
+
+    public int OnMessageRevokeOffset { get; set; }
+
+    public int OnMessageRevokeCallOffset { get; set; }
 }
 
 public class SettingSection

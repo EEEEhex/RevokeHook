@@ -33,7 +33,7 @@ public partial class MainWindow
     {
         EnsureLocalFiles();
 
-        AppendLog("程序启动 v5.0.0。");
+        AppendLog("程序启动 v5.2.0。");
         AppendLog("INI 路径: " + _iniPath);
         AppendLog("Config3 路径: " + _configPath);
 
@@ -116,10 +116,11 @@ public partial class MainWindow
                 return;
             }
 
-            DeleteMessagesChainTextBox.Text = string.Empty;
-            AddMessageToDbChainTextBox.Text = string.Empty;
             KeyFuncDelMsgOffsetTextBox.Text = string.Empty;
             KeyFuncAdd2DBOffsetTextBox.Text = string.Empty;
+            KeyFuncNotifyOneMessageAddedOffsetTextBox.Text = string.Empty;
+            KeyFuncOnMessageRevokeOffsetTextBox.Text = string.Empty;
+            KeyFuncOnMessageRevokeCallOffsetTextBox.Text = string.Empty;
             UpdateSearchProgress(new CallChainSearchProgress(0, "准备搜索..."));
 
             ToggleTopButtons(false);
@@ -128,7 +129,9 @@ public partial class MainWindow
             var request = new CallChainSearchRequest(
                 Signature1TextBox.Text,
                 Signature2TextBox.Text,
-                Signature3TextBox.Text);
+                Signature3TextBox.Text,
+                Signature4TextBox.Text,
+                Signature5TextBox.Text);
             var progress = new Progress<CallChainSearchProgress>(UpdateSearchProgress);
 
             var result = await Task.Run(() => CallChainSearchService.Search(wechatDllPath, request, progress));
@@ -149,12 +152,30 @@ public partial class MainWindow
     {
         foreach (var candidateCount in result.CandidateCounts)
         {
-            AppendLog($"{candidateCount.Key} 候选函数数量: {candidateCount.Value}" + (candidateCount.Value != 1 ? ", 注意候选函数数量不唯一" : ""));
+            var suffix = string.Empty;
+            if (candidateCount.Key == "OnMessageRevoke" && result.OnMessageRevokeCall is not null)
+            {
+                suffix = "，已通过父调用关系筛选出唯一撤回流程调用点";
+            }
+            else if (candidateCount.Value != 1)
+            {
+                suffix = "，注意候选函数数量不唯一";
+            }
+
+            AppendLog($"{candidateCount.Key} 候选函数数量: {candidateCount.Value}{suffix}");
         }
 
         AppendLocatedFunction(result.OriginFunction);
         AppendLocatedFunction(result.DeleteMessagesFunction);
         AppendLocatedFunction(result.AddMessageToDbFunction);
+        if (result.HandleMtvoipSysMsgFunction is not null)
+        {
+            AppendLocatedFunction(result.HandleMtvoipSysMsgFunction);
+        }
+        if (result.OnMessageRevokeFunction is not null)
+        {
+            AppendLocatedFunction(result.OnMessageRevokeFunction);
+        }
 
         if (!result.UsedNativeCapstone)
         {
@@ -164,9 +185,7 @@ public partial class MainWindow
         if (result.DeleteMessagesChain is not null)
         {
             KeyFuncDelMsgOffsetTextBox.Text = NumericParser.FormatHexUnchecked(result.DeleteMessagesChain.RootCallRva);
-            DeleteMessagesChainTextBox.Text = result.DeleteMessagesChain.Format();
-            AppendLog("DeleteMessages 调用链已搜索完毕");
-            // AppendLog(result.DeleteMessagesChain.Format());
+            AppendSearchBlock("DeleteMessages 调用链", result.DeleteMessagesChain.Format());
         }
         else
         {
@@ -176,13 +195,35 @@ public partial class MainWindow
         if (result.AddMessageToDbChain is not null)
         {
             KeyFuncAdd2DBOffsetTextBox.Text = NumericParser.FormatHexUnchecked(result.AddMessageToDbChain.TargetCallRva);
-            AddMessageToDbChainTextBox.Text = result.AddMessageToDbChain.Format();
-            AppendLog("CoAddMessageToDB 调用链已搜索完毕");
-            // AppendLog(result.AddMessageToDbChain.Format());
+            AppendSearchBlock("CoAddMessageToDB 调用链", result.AddMessageToDbChain.Format());
         }
         else
         {
             AppendLog("未在三层调用深度内找到 CoAddMessageToDB 调用链。");
+        }
+
+        if (result.NotifyOneMessageAdded is not null)
+        {
+            KeyFuncNotifyOneMessageAddedOffsetTextBox.Text =
+                NumericParser.FormatHexUnchecked(result.NotifyOneMessageAdded.TargetFunctionRva);
+            AppendSearchBlock("单消息新增通知", result.NotifyOneMessageAdded.Format());
+        }
+        else
+        {
+            AppendLog("未提供 HandleMTVOIPSysMsg 特征，未定位单消息新增通知包装函数。");
+        }
+
+        if (result.OnMessageRevokeCall is not null)
+        {
+            KeyFuncOnMessageRevokeOffsetTextBox.Text =
+                NumericParser.FormatHexUnchecked(result.OnMessageRevokeCall.TargetFunctionRva);
+            KeyFuncOnMessageRevokeCallOffsetTextBox.Text =
+                NumericParser.FormatHexUnchecked(result.OnMessageRevokeCall.Call.Rva);
+            AppendSearchBlock("OnMessageRevoke 撤回流程调用", result.OnMessageRevokeCall.Format());
+        }
+        else
+        {
+            AppendLog("未提供 OnMessageRevoke 特征，未定位撤回通知函数及其调用点。");
         }
 
         AppendLog("搜索完成, 结果已回填到偏移框。");
@@ -329,6 +370,16 @@ public partial class MainWindow
             Signature1TextBox.Text = entry.Sig1 ?? string.Empty;
             Signature2TextBox.Text = entry.Sig2 ?? string.Empty;
             Signature3TextBox.Text = entry.Sig3 ?? string.Empty;
+            Signature4TextBox.Text = entry.Sig4 ?? string.Empty;
+            Signature5TextBox.Text = entry.Sig5 ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(entry.Sig4) || string.IsNullOrWhiteSpace(entry.Sig5))
+            {
+                KeyFuncNotifyOneMessageAddedOffsetTextBox.Text = "0";
+                KeyFuncOnMessageRevokeOffsetTextBox.Text = "0";
+                KeyFuncOnMessageRevokeCallOffsetTextBox.Text = "0";
+                AppendLog("当前版本没有实时 UI 特征，已禁用相关偏移。");
+            }
 
             AppendLog("已选择版本特征: " + configVersion);
         }
@@ -383,6 +434,12 @@ public partial class MainWindow
     {
         KeyFuncDelMsgOffsetTextBox.Text = NumericParser.FormatCompact(config.KeyFunc.DelMsgOffset);
         KeyFuncAdd2DBOffsetTextBox.Text = NumericParser.FormatCompact(config.KeyFunc.Add2DBOffset);
+        KeyFuncNotifyOneMessageAddedOffsetTextBox.Text =
+            NumericParser.FormatCompact(config.KeyFunc.NotifyOneMessageAddedOffset);
+        KeyFuncOnMessageRevokeOffsetTextBox.Text =
+            NumericParser.FormatCompact(config.KeyFunc.OnMessageRevokeOffset);
+        KeyFuncOnMessageRevokeCallOffsetTextBox.Text =
+            NumericParser.FormatCompact(config.KeyFunc.OnMessageRevokeCallOffset);
 
         AutoRunCheckBox.IsChecked = config.Setting.AutoRun;
         OutputDebugMsgCheckBox.IsChecked = config.Setting.OutputDebugMsg;
@@ -395,7 +452,13 @@ public partial class MainWindow
         _currentConfig.KeyFunc = new KeyFuncSection
         {
             DelMsgOffset = NumericParser.ParseInt(KeyFuncDelMsgOffsetTextBox.Text),
-            Add2DBOffset = NumericParser.ParseInt(KeyFuncAdd2DBOffsetTextBox.Text)
+            Add2DBOffset = NumericParser.ParseInt(KeyFuncAdd2DBOffsetTextBox.Text),
+            NotifyOneMessageAddedOffset =
+                NumericParser.ParseInt(KeyFuncNotifyOneMessageAddedOffsetTextBox.Text),
+            OnMessageRevokeOffset =
+                NumericParser.ParseInt(KeyFuncOnMessageRevokeOffsetTextBox.Text),
+            OnMessageRevokeCallOffset =
+                NumericParser.ParseInt(KeyFuncOnMessageRevokeCallOffsetTextBox.Text)
         };
         _currentConfig.Setting = new SettingSection
         {
@@ -454,6 +517,19 @@ public partial class MainWindow
     private void AppendLog(string message)
     {
         LogTextBox.AppendText($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+        LogTextBox.ScrollToEnd();
+    }
+
+    private void AppendSearchBlock(string title, string content)
+    {
+        var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        LogTextBox.AppendText($"[{timestamp}] ── {title} ──{Environment.NewLine}");
+        foreach (var line in content.Replace("\r\n", "\n").Split('\n'))
+        {
+            LogTextBox.AppendText($"    {line}{Environment.NewLine}");
+        }
+
+        LogTextBox.AppendText(Environment.NewLine);
         LogTextBox.ScrollToEnd();
     }
 }

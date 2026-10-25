@@ -50,6 +50,9 @@ public static class IniService
         builder.AppendLine("[KeyFunc]");
         builder.AppendLine($"DelMsgOffset={config.KeyFunc.DelMsgOffset}");
         builder.AppendLine($"Add2DBOffset={config.KeyFunc.Add2DBOffset}");
+        builder.AppendLine($"NotifyOneMessageAddedOffset={config.KeyFunc.NotifyOneMessageAddedOffset}");
+        builder.AppendLine($"OnMessageRevokeOffset={config.KeyFunc.OnMessageRevokeOffset}");
+        builder.AppendLine($"OnMessageRevokeCallOffset={config.KeyFunc.OnMessageRevokeCallOffset}");
         builder.AppendLine();
 
         builder.AppendLine("[Setting]");
@@ -75,6 +78,18 @@ public static class IniService
                 else if (key == "Add2DBOffset")
                 {
                     config.KeyFunc.Add2DBOffset = NumericParser.ParseInt(value);
+                }
+                else if (key == "NotifyOneMessageAddedOffset")
+                {
+                    config.KeyFunc.NotifyOneMessageAddedOffset = NumericParser.ParseInt(value);
+                }
+                else if (key == "OnMessageRevokeOffset")
+                {
+                    config.KeyFunc.OnMessageRevokeOffset = NumericParser.ParseInt(value);
+                }
+                else if (key == "OnMessageRevokeCallOffset")
+                {
+                    config.KeyFunc.OnMessageRevokeCallOffset = NumericParser.ParseInt(value);
                 }
 
                 break;

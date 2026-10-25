@@ -16,7 +16,7 @@ public sealed record UpdateCheckResult(
 
 public static class UpdateCheckService
 {
-    public const string CurrentVersion = "v5.1.2";
+    public const string CurrentVersion = "v5.2.0";
 
     private const string DefaultLatestReleaseApiUrl = "https://api.github.com/repos/EEEEhex/RevokeHook/releases/latest";
 
@@ -68,7 +68,7 @@ public static class UpdateCheckService
             Timeout = TimeSpan.FromSeconds(20)
         };
 
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("RevokeHookUI", "5.1.2"));
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("RevokeHookUI", "5.2.0"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         return client;
     }

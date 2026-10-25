@@ -8,7 +8,12 @@ using System.Text;
 
 namespace RevokeHookUI.Services;
 
-public sealed record CallChainSearchRequest(string Signature1Hex, string Signature2Hex, string Signature3Hex);
+public sealed record CallChainSearchRequest(
+    string Signature1Hex,
+    string Signature2Hex,
+    string Signature3Hex,
+    string Signature4Hex,
+    string Signature5Hex);
 
 public sealed record CallChainSearchProgress(int Percent, string Message);
 
@@ -20,9 +25,17 @@ public sealed class CallChainSearchResult
 
     public LocatedFunction AddMessageToDbFunction { get; init; } = LocatedFunction.Empty("CoAddMessageToDB");
 
+    public LocatedFunction? HandleMtvoipSysMsgFunction { get; init; }
+
+    public LocatedFunction? OnMessageRevokeFunction { get; init; }
+
     public CallChainResult? DeleteMessagesChain { get; init; }
 
     public CallChainResult? AddMessageToDbChain { get; init; }
+
+    public DirectCallResult? NotifyOneMessageAdded { get; init; }
+
+    public DirectCallResult? OnMessageRevokeCall { get; init; }
 
     public bool UsedNativeCapstone { get; init; }
 
@@ -73,6 +86,23 @@ public sealed record CallChainResult(
 
 public sealed record CallInstruction(uint Rva, uint CallerRva, uint TargetRva, string Text, bool IsDirectTarget = false);
 
+public sealed record DirectCallResult(
+    string TargetName,
+    LocatedFunction AnchorFunction,
+    CallInstruction Call,
+    string EvidenceText)
+{
+    public uint TargetFunctionRva => Call.TargetRva;
+
+    public string Format()
+    {
+        return $"{TargetName}: {NumericParser.FormatHexUnchecked(TargetFunctionRva)}\n" +
+               $"  anchor: {AnchorFunction.Name} {NumericParser.FormatHexUnchecked(AnchorFunction.FunctionRva)}\n" +
+               $"  call: {NumericParser.FormatHexUnchecked(Call.Rva)}: {Call.Text}\n" +
+               $"  evidence: {EvidenceText}";
+    }
+}
+
 public static class CallChainSearchService
 {
     private const int MaxCallDepth = 3;
@@ -92,13 +122,25 @@ public static class CallChainSearchService
         var text = image.GetRequiredSection(".text");
         var rdata = image.GetRequiredSection(".rdata");
 
-        progress?.Report(new CallChainSearchProgress(15, "解析三个加密字符串的 16 进制值..."));
-        var signatures = new[]
+        progress?.Report(new CallChainSearchProgress(15, "解析加密字符串的 16 进制值..."));
+        var signatures = new List<SignatureTarget>
         {
             new SignatureTarget("CoReplaceOriginMessageByRevoke", ParseHexBytes(request.Signature1Hex)),
             new SignatureTarget("DeleteMessages", ParseHexBytes(request.Signature2Hex)),
             new SignatureTarget("CoAddMessageToDB", ParseHexBytes(request.Signature3Hex))
         };
+        if (!string.IsNullOrWhiteSpace(request.Signature4Hex))
+        {
+            signatures.Add(new SignatureTarget(
+                "HandleMTVOIPSysMsg",
+                ParseHexBytes(request.Signature4Hex)));
+        }
+        if (!string.IsNullOrWhiteSpace(request.Signature5Hex))
+        {
+            signatures.Add(new SignatureTarget(
+                "OnMessageRevoke",
+                ParseHexBytes(request.Signature5Hex)));
+        }
 
         progress?.Report(new CallChainSearchProgress(25, "在 .rdata 并行定位字符串..."));
         var stringMatches = LocateStringMatches(rdata, signatures);
@@ -110,6 +152,19 @@ public static class CallChainSearchService
         progress?.Report(new CallChainSearchProgress(65, "解析调用图并搜索三层调用链..."));
         var callScanner = new FunctionCallScanner(image, text, disassembler);
         var selected = SelectFunctionsByCallChains(callScanner, functionCandidates);
+        DirectCallResult? notifyOneMessageAdded = null;
+        if (functionCandidates.TryGetValue("HandleMTVOIPSysMsg", out var mtvoipCandidates))
+        {
+            notifyOneMessageAdded = FindNotifyOneMessageAdded(callScanner, mtvoipCandidates);
+        }
+        DirectCallResult? onMessageRevokeCall = null;
+        if (functionCandidates.TryGetValue("OnMessageRevoke", out var onMessageRevokeCandidates))
+        {
+            onMessageRevokeCall = FindOnMessageRevokeCall(
+                callScanner,
+                selected.Origin,
+                onMessageRevokeCandidates);
+        }
 
         progress?.Report(new CallChainSearchProgress(100, "搜索完成。"));
         return new CallChainSearchResult
@@ -117,11 +172,92 @@ public static class CallChainSearchService
             OriginFunction = selected.Origin,
             DeleteMessagesFunction = selected.DeleteMessages,
             AddMessageToDbFunction = selected.AddMessageToDb,
+            HandleMtvoipSysMsgFunction = notifyOneMessageAdded?.AnchorFunction,
+            OnMessageRevokeFunction = onMessageRevokeCall?.AnchorFunction,
             DeleteMessagesChain = selected.DeleteMessagesChain,
             AddMessageToDbChain = selected.AddMessageToDbChain,
+            NotifyOneMessageAdded = notifyOneMessageAdded,
+            OnMessageRevokeCall = onMessageRevokeCall,
             UsedNativeCapstone = disassembler.UsedNativeCapstone,
             CandidateCounts = functionCandidates.ToDictionary(pair => pair.Key, pair => pair.Value.Count, StringComparer.Ordinal)
         };
+    }
+
+    private static DirectCallResult FindOnMessageRevokeCall(
+        FunctionCallScanner scanner,
+        LocatedFunction originFunction,
+        IReadOnlyList<LocatedFunction> onMessageRevokeCandidates)
+    {
+        var matches = new List<DirectCallResult>();
+        foreach (var onMessageRevoke in onMessageRevokeCandidates)
+        {
+            foreach (var call in scanner.FindDirectCallsTo(onMessageRevoke.FunctionRva))
+            {
+                var callerCallsOrigin = scanner.GetCalls(call.CallerRva)
+                    .Any(candidate => candidate.TargetRva == originFunction.FunctionRva);
+                if (!callerCallsOrigin)
+                {
+                    continue;
+                }
+
+                matches.Add(new DirectCallResult(
+                    "OnMessageRevoke",
+                    onMessageRevoke,
+                    call with { IsDirectTarget = true },
+                    $"caller {NumericParser.FormatHexUnchecked(call.CallerRva)} also directly calls " +
+                    $"CoReplaceOriginMessageByRevoke {NumericParser.FormatHexUnchecked(originFunction.FunctionRva)}"));
+            }
+        }
+
+        var uniqueMatches = matches
+            .GroupBy(match => new
+            {
+                match.AnchorFunction.FunctionRva,
+                match.Call.CallerRva,
+                match.Call.Rva
+            })
+            .Select(group => group.First())
+            .ToList();
+        if (uniqueMatches.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"OnMessageRevoke 撤回流程调用不唯一，候选数量: {uniqueMatches.Count}。");
+        }
+
+        return uniqueMatches[0];
+    }
+
+    private static DirectCallResult FindNotifyOneMessageAdded(
+        FunctionCallScanner scanner,
+        IReadOnlyList<LocatedFunction> handlerCandidates)
+    {
+        var matches = new List<DirectCallResult>();
+        foreach (var handler in handlerCandidates)
+        {
+            if (scanner.TryFindMtvoipMessageAddedCall(
+                    handler.FunctionRva,
+                    out var call,
+                    out var evidence))
+            {
+                matches.Add(new DirectCallResult(
+                    "NotifyOneMessageAdded",
+                    handler,
+                    call,
+                    evidence));
+            }
+        }
+
+        var uniqueMatches = matches
+            .GroupBy(match => new { match.AnchorFunction.FunctionRva, match.TargetFunctionRva })
+            .Select(group => group.First())
+            .ToList();
+        if (uniqueMatches.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"HandleMTVOIPSysMsg 中的单消息新增通知调用不唯一，候选数量: {uniqueMatches.Count}。");
+        }
+
+        return uniqueMatches[0];
     }
 
     private static Dictionary<string, List<StringMatch>> LocateStringMatches(
@@ -515,6 +651,198 @@ internal sealed class FunctionCallScanner
     public IReadOnlyList<CallInstruction> GetCalls(uint functionRva)
     {
         return _cache.GetOrAdd(functionRva, ScanCalls);
+    }
+
+    public IReadOnlyList<CallInstruction> FindDirectCallsTo(uint targetFunctionRva)
+    {
+        var candidates = new HashSet<uint>();
+        var span = _text.Bytes.Span;
+        for (var offset = 0; offset + 5 <= span.Length; offset++)
+        {
+            if (span[offset] != 0xE8)
+            {
+                continue;
+            }
+
+            var callRva = _text.VirtualAddress + (uint)offset;
+            var displacement = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset + 1, 4));
+            var rawTargetRva = unchecked((uint)(callRva + 5 + displacement));
+            var normalizedTargetRva = _image.FindFunction(rawTargetRva)?.BeginRva ?? rawTargetRva;
+            if (normalizedTargetRva == targetFunctionRva)
+            {
+                candidates.Add(callRva);
+            }
+        }
+
+        var matches = new List<CallInstruction>();
+        foreach (var callRva in candidates.OrderBy(value => value))
+        {
+            var caller = _image.FindFunction(callRva);
+            if (caller is null)
+            {
+                continue;
+            }
+
+            var verified = GetCalls(caller.Value.BeginRva)
+                .FirstOrDefault(call => call.Rva == callRva && call.TargetRva == targetFunctionRva);
+            if (verified is not null)
+            {
+                matches.Add(verified);
+            }
+        }
+
+        return matches;
+    }
+
+    public bool TryFindMtvoipMessageAddedCall(
+        uint handlerFunctionRva,
+        out CallInstruction call,
+        out string evidence)
+    {
+        var instructions = GetInstructions(handlerFunctionRva);
+        if (instructions.Count > 0)
+        {
+            string? savedThisRegister = null;
+            foreach (var instruction in instructions.Take(32))
+            {
+                var operands = instruction.Operands;
+                if (!string.Equals(instruction.Mnemonic, "mov", StringComparison.OrdinalIgnoreCase) ||
+                    operands.Length < 2 ||
+                    NormalizeOperand(operands[1]) != "rcx")
+                {
+                    continue;
+                }
+
+                var destination = NormalizeOperand(operands[0]);
+                if (destination is "rbx" or "rsi" or "rdi" or
+                    "r12" or "r13" or "r14" or "r15")
+                {
+                    savedThisRegister = destination;
+                    break;
+                }
+            }
+
+            if (savedThisRegister is not null)
+            {
+                var matches = new List<(X64Instruction Instruction, uint TargetRva)>();
+                for (var index = 2; index < instructions.Count; index++)
+                {
+                    var restoreThis = instructions[index - 2];
+                    var loadMessage = instructions[index - 1];
+                    var candidateCall = instructions[index];
+                    if (!IsRegisterMove(restoreThis, "rcx", savedThisRegister) ||
+                        !IsRegisterMove(loadMessage, "rdx", "rax") ||
+                        !string.Equals(candidateCall.Mnemonic, "call", StringComparison.OrdinalIgnoreCase) ||
+                        candidateCall.DirectTargetRva is not uint targetRva)
+                    {
+                        continue;
+                    }
+
+                    var targetFunction = _image.FindFunction(targetRva);
+                    if (targetFunction is not null)
+                    {
+                        matches.Add((candidateCall, targetFunction.Value.BeginRva));
+                    }
+                }
+
+                if (matches.Count == 1)
+                {
+                    var match = matches[0];
+                    call = new CallInstruction(
+                        match.Instruction.Rva,
+                        handlerFunctionRva,
+                        match.TargetRva,
+                        match.Instruction.Text,
+                        true);
+                    evidence = $"saved-this={savedThisRegister}; mov rcx,{savedThisRegister}; mov rdx,rax; call";
+                    return true;
+                }
+            }
+        }
+
+        return TryFindMtvoipMessageAddedCallByOpcode(handlerFunctionRva, out call, out evidence);
+    }
+
+    private bool TryFindMtvoipMessageAddedCallByOpcode(
+        uint handlerFunctionRva,
+        out CallInstruction call,
+        out string evidence)
+    {
+        call = default!;
+        evidence = string.Empty;
+
+        var function = _image.FindFunction(handlerFunctionRva);
+        if (function is null)
+        {
+            return false;
+        }
+
+        var startOffset = (int)(function.Value.BeginRva - _text.VirtualAddress);
+        var length = (int)Math.Min(
+            function.Value.EndRva - function.Value.BeginRva,
+            _text.Bytes.Length - startOffset);
+        if (startOffset < 0 || length < 11 || startOffset >= _text.Bytes.Length)
+        {
+            return false;
+        }
+
+        var bytes = _text.Bytes.Span;
+        var endOffset = startOffset + length;
+        var matches = new List<CallInstruction>();
+
+        // Fallback for the current MSVC form:
+        //   48 89 F1       mov rcx, rsi
+        //   48 89 C2       mov rdx, rax
+        //   E8 xx xx xx xx call rel32
+        for (var offset = startOffset; offset + 11 <= endOffset; offset++)
+        {
+            var restoresRcxFromRsi =
+                bytes[offset] == 0x48 &&
+                ((bytes[offset + 1] == 0x89 && bytes[offset + 2] == 0xF1) ||
+                 (bytes[offset + 1] == 0x8B && bytes[offset + 2] == 0xCE));
+            var loadsRdxFromRax =
+                bytes[offset + 3] == 0x48 &&
+                ((bytes[offset + 4] == 0x89 && bytes[offset + 5] == 0xC2) ||
+                 (bytes[offset + 4] == 0x8B && bytes[offset + 5] == 0xD0));
+            if (!restoresRcxFromRsi || !loadsRdxFromRax || bytes[offset + 6] != 0xE8)
+            {
+                continue;
+            }
+
+            var callRva = _text.VirtualAddress + (uint)offset + 6;
+            var displacement = BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(offset + 7, 4));
+            var targetRva = unchecked((uint)(callRva + 5 + displacement));
+            var targetFunction = _image.FindFunction(targetRva);
+            if (targetFunction is null)
+            {
+                continue;
+            }
+
+            matches.Add(new CallInstruction(
+                callRva,
+                handlerFunctionRva,
+                targetFunction.Value.BeginRva,
+                $"call {NumericParser.FormatHexUnchecked(targetRva)}",
+                true));
+        }
+
+        if (matches.Count != 1)
+        {
+            return false;
+        }
+
+        call = matches[0];
+        evidence = "opcode fallback: mov rcx,rsi; mov rdx,rax; call rel32";
+        return true;
+    }
+
+    private static bool IsRegisterMove(X64Instruction instruction, string destination, string source)
+    {
+        var operands = instruction.Operands;
+        return string.Equals(instruction.Mnemonic, "mov", StringComparison.OrdinalIgnoreCase) &&
+               operands.Length >= 2 &&
+               NormalizeOperand(operands[0]) == destination &&
+               NormalizeOperand(operands[1]) == source;
     }
 
     public bool TryFindZeroArgumentSetupBeforeCall(

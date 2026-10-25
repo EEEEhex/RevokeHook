@@ -23,12 +23,19 @@ static HANDLE g_hLogFile = INVALID_HANDLE_VALUE;
 //VEH + INT3断点
 static void* g_bpDelMsg = nullptr;
 static void* g_bpAdd2DB = nullptr;
+static void* g_bpRevokeNotifyCall = nullptr;
+
+using NotifyOneMessageAddedFn = int64_t(__fastcall*)(void* message_manager, void* message);
+static NotifyOneMessageAddedFn g_notifyOneMessageAdded = nullptr;
+static bool g_realtime_ui_enabled = false;
 
 static DWORD g_tlsThreadState = TLS_OUT_OF_INDEXES;
 struct ThreadState
 {
     uint8_t last_org_srvid[8];      //真实的srvid 防止插入两条撤回提醒
     uint8_t anti_revoke_cur_msg;    //是否防撤回当前这条消息
+    uint8_t ui_notify_pending;       //Add2DB修改成功，等待补发消息新增通知
+    uint8_t notifying_ui;            //防止补发过程中意外重入
 };
 
 static ThreadState* GetThreadState()
@@ -93,6 +100,9 @@ struct BASICINFO
     uint64_t imgbase;           // Weixin.dll的基址
 	uint64_t add2db_offset;     // 将撤回消息添加到数据库的函数偏移
 	uint64_t delmsg_offset;     // 删除要撤回消息函数的偏移
+    uint64_t notify_one_message_added_offset; // 单消息新增通知包装函数偏移
+    uint64_t on_message_revoke_offset; // OnMessageRevoke函数偏移
+    uint64_t on_message_revoke_call_offset; // 撤回流程中调用OnMessageRevoke的call偏移
 };
 
 struct DELMSGINFO
@@ -284,6 +294,25 @@ bool ReadExternalConfig(char* ini_path)
 	g_config_info.basic_info.imgbase = (uint64_t)weixin_dll_base;
 	g_config_info.basic_info.delmsg_offset = g_config["KeyFunc"]["DelMsgOffset"].as<int>();
 	g_config_info.basic_info.add2db_offset = g_config["KeyFunc"]["Add2DBOffset"].as<int>();
+    auto notify_offset = g_config["KeyFunc"].find("NotifyOneMessageAddedOffset");
+    if (notify_offset != g_config["KeyFunc"].end())
+    {
+        g_config_info.basic_info.notify_one_message_added_offset =
+            notify_offset->second.as<int>();
+    }
+    auto on_message_revoke_offset = g_config["KeyFunc"].find("OnMessageRevokeOffset");
+    if (on_message_revoke_offset != g_config["KeyFunc"].end())
+    {
+        g_config_info.basic_info.on_message_revoke_offset =
+            on_message_revoke_offset->second.as<int>();
+    }
+    auto on_message_revoke_call_offset =
+        g_config["KeyFunc"].find("OnMessageRevokeCallOffset");
+    if (on_message_revoke_call_offset != g_config["KeyFunc"].end())
+    {
+        g_config_info.basic_info.on_message_revoke_call_offset =
+            on_message_revoke_call_offset->second.as<int>();
+    }
 
 	g_anti_revoke_self_msg = g_config["Setting"]["AntiRevokeSelf"].as<bool>();
 	g_output_debeug_msg = g_config["Setting"]["OutputDebugMsg"].as<bool>();
@@ -379,6 +408,34 @@ static bool IsMemoryReadable(const void* addr, size_t size)
     return ((uintptr_t)addr + size) <= region_end;
 }
 
+static bool IsExpectedRelativeCall(const void* call_address, const void* expected_target)
+{
+    if (!IsMemoryReadable(call_address, 5) || *(const uint8_t*)call_address != 0xE8)
+        return false;
+
+    int32_t displacement = 0;
+    memcpy(&displacement, (const uint8_t*)call_address + 1, sizeof(displacement));
+    const uint8_t* actual_target =
+        (const uint8_t*)call_address + 5 + displacement;
+    return actual_target == expected_target;
+}
+
+static bool TryNotifyOneMessageAdded(void* message_manager, void* message)
+{
+    if (g_notifyOneMessageAdded == nullptr)
+        return false;
+
+    __try
+    {
+        g_notifyOneMessageAdded(message_manager, message);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
 static StdString* FindStdStringWithSig(uint64_t base_addr, size_t scan_range,
     const uint8_t* sig, size_t sig_len)
 {
@@ -410,24 +467,39 @@ static StdString* FindStdStringWithSig(uint64_t base_addr, size_t scan_range,
     return nullptr;
 }
 
-static int FindZeroArgIndex(PCONTEXT ctx, int start_idx, int end_idx)
+static int FindZeroArgIndex(
+    PCONTEXT ctx,
+    int start_idx,
+    int end_idx,
+    bool search_reverse = false)
 {
+    if (start_idx > end_idx)
+        return -1;
+
+    auto get_index = [=](int offset) {
+        return search_reverse ? end_idx - offset : start_idx + offset;
+    };
+    const int arg_count = end_idx - start_idx + 1;
+
     // Pass 1: 64-bit == 0
-    for (int i = start_idx; i <= end_idx; i++)
+    for (int offset = 0; offset < arg_count; offset++)
     {
+        int i = get_index(offset);
         if (GetArgValue(ctx, i) == 0)
             return i;
     }
     // Pass 2: low 32 bits == 0 (upper 32 might be garbage)
-    for (int i = start_idx; i <= end_idx; i++)
+    for (int offset = 0; offset < arg_count; offset++)
     {
+        int i = get_index(offset);
         uint64_t val = GetArgValue(ctx, i);
         if (val != 0 && (val & 0xFFFFFFFF) == 0)
             return i;
     }
     // Pass 3: low byte == 0, and is a valid user-mode pointer
-    for (int i = start_idx; i <= end_idx; i++)
+    for (int offset = 0; offset < arg_count; offset++)
     {
+        int i = get_index(offset);
         uint64_t val = GetArgValue(ctx, i);
         if (val != 0 && (val & 0xFF) == 0 &&
             (val >= 0x10000 && val <= 0x00007FFFFFFFFFFF))
@@ -471,6 +543,10 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
   
     if (rip == (uint64_t)g_bpDelMsg) 
     {
+        // A new revoke flow starts on this thread. Do not carry a stale UI notification request over from an earlier message.
+        if (g_realtime_ui_enabled)
+            thread_state->ui_notify_pending = 0;
+
         uint8_t revoke_sig[] = { 0xe6, 0x92, 0xa4, 0xe5, 0x9b, 0x9e }; //'撤回'
         uint8_t self_revoke_sig[] = { 0xe4, 0xbd, 0xa0, 0xe6, 0x92, 0xa4, 0xe5, 0x9b, 0x9e }; //'你撤回'
         uint8_t revoke_sig_english[] = { 0x72, 0x65, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x64 }; //'recalled'
@@ -572,7 +648,9 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
 
         if (!g_config_info.add2db_info.initialized)
         {
-            int arg_bool_index = FindZeroArgIndex(ctx, 3, 8);
+            // Search from the back so a later optional argument that is zero does not hide the autoincrement flag as easily. 
+            // Keep slots 7 and 8 in the range for compatibility if parameters are added.
+            int arg_bool_index = FindZeroArgIndex(ctx, 3, 8, true);
             if (arg_bool_index < 0)
             {
                 OutputDebugPrintf("[Debug] Add2DB: Cannot find arg_bool (0 param)");
@@ -684,9 +762,64 @@ static void OnTargetHit(PCONTEXT ctx, PEXCEPTION_RECORD /*pExc*/)
         }
 
         if (SetArgValue(ctx, arg_bool_index, 1))
+        {
+            if (g_realtime_ui_enabled)
+                thread_state->ui_notify_pending = 1;
             OutputDebugPrintf("[Debug] Set Arg %d to 1", arg_bool_index);
+        }
         else
             OutputDebugPrintf("[Debug] Set Arg %d Failed!", arg_bool_index);
+    }
+    else if (rip == (uint64_t)g_bpRevokeNotifyCall)
+    {
+        // Only suppress Weixin's OnMessageRevoke for messages that are actually covered by anti-revoke. 
+        // In particular, when AntiRevokeSelf is disabled, 
+        // a self-revoke must follow the original Weixin path without either skipping this call or emitting an added message notification.
+        if (thread_state->anti_revoke_cur_msg == 0)
+            return;
+
+        OutputDebugPrintf(
+            "[NotifyHit] pending=%d notifying=%d manager=%p message=%p",
+            thread_state->ui_notify_pending,
+            thread_state->notifying_ui,
+            (void*)ctx->Rcx,
+            (void*)ctx->Rdx);
+
+        // Skip the original OnMessageRevoke for this anti-revoke flow. 
+        // This intentionally also covers a later repeat with ui_notify_pending=0.
+        ctx->Rip += 5;
+
+        // At this callsite Weixin has already prepared the arguments for:
+        //   OnMessageRevoke(MessageManager* manager, Message* message)
+        // The located single-message wrapper accepts the same pair and uses
+        // Weixin's own Message copy/vector lifetime before emitting message-added.
+        if (thread_state->ui_notify_pending == 0 || thread_state->notifying_ui != 0)
+            return;
+
+        thread_state->ui_notify_pending = 0;
+        thread_state->anti_revoke_cur_msg = 0;
+
+        void* message_manager = reinterpret_cast<void*>(ctx->Rcx);
+        void* message = reinterpret_cast<void*>(ctx->Rdx);
+        if (!IsMemoryReadable(message_manager, 0xF0) ||
+            !IsMemoryReadable(message, 0x2E8))
+        {
+            OutputDebugPrintf("[RevokeHook] Message-added notify args invalid: manager=%p message=%p",
+                message_manager, message);
+            return;
+        }
+
+        thread_state->notifying_ui = 1;
+        const bool notified = TryNotifyOneMessageAdded(message_manager, message);
+        thread_state->notifying_ui = 0;
+
+        if (notified)
+            OutputDebugPrintf("[RevokeHook] Message-added notify sent: manager=%p message=%p",
+                message_manager, message);
+        else
+            OutputDebugPrintf("[RevokeHook] Message-added notify failed: manager=%p message=%p",
+                message_manager, message);
+
     }
 }
 
@@ -757,11 +890,53 @@ BOOL APIENTRY DllMain( HMODULE hModule,
             OutputDebugPrintf("[RevokeHook] AddBp %p Error", g_bpAdd2DB);
         else
             OutputDebugPrintf("[RevokeHook] AddBp %p OK", g_bpAdd2DB);
+
+        if (g_config_info.basic_info.notify_one_message_added_offset == 0 ||
+            g_config_info.basic_info.on_message_revoke_offset == 0 ||
+            g_config_info.basic_info.on_message_revoke_call_offset == 0)
+        {
+            OutputDebugStringA("[RevokeHook] Realtime UI offsets missing; realtime UI disabled");
+        }
+        else
+        {
+            g_notifyOneMessageAdded = reinterpret_cast<NotifyOneMessageAddedFn>(
+                g_config_info.basic_info.imgbase +
+                g_config_info.basic_info.notify_one_message_added_offset);
+            g_bpRevokeNotifyCall = (void*)(
+                g_config_info.basic_info.imgbase +
+                g_config_info.basic_info.on_message_revoke_call_offset);
+            void* on_message_revoke = (void*)(
+                g_config_info.basic_info.imgbase +
+                g_config_info.basic_info.on_message_revoke_offset);
+
+            if (!IsExpectedRelativeCall(g_bpRevokeNotifyCall, on_message_revoke))
+            {
+                OutputDebugStringA("[RevokeHook] OnMessageRevoke callsite validation failed; UI notify disabled");
+                OutputDebugPrintf("[RevokeHook] Invalid OnMessageRevoke callsite: call=%p target=%p",
+                    g_bpRevokeNotifyCall,
+                    on_message_revoke);
+                g_bpRevokeNotifyCall = nullptr;
+                g_notifyOneMessageAdded = nullptr;
+            }
+            else if (VehBp_Set(g_bpRevokeNotifyCall, OnTargetHit) == -1)
+            {
+                OutputDebugPrintf("[RevokeHook] AddBp %p Error", g_bpRevokeNotifyCall);
+                g_bpRevokeNotifyCall = nullptr;
+                g_notifyOneMessageAdded = nullptr;
+            }
+            else
+            {
+                g_realtime_ui_enabled = true;
+                OutputDebugPrintf("[RevokeHook] AddBp %p OK (message-added notify)",
+                    g_bpRevokeNotifyCall);
+            }
+        }
         break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
         break;
     case DLL_PROCESS_DETACH:
+        g_realtime_ui_enabled = false;
         OutputDebugString(TEXT("[RevokeHook] Uninstall VEH & Cancel Bp!"));
         VehBp_Uninit();
         FreeCurrentThreadState();

@@ -17,4 +17,10 @@ public sealed class Config3Entry
 
     [JsonPropertyName("sig3")]
     public string? Sig3 { get; set; }
+
+    [JsonPropertyName("sig4")]
+    public string? Sig4 { get; set; }
+
+    [JsonPropertyName("sig5")]
+    public string? Sig5 { get; set; }
 }

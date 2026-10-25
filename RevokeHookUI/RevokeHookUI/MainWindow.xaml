@@ -7,8 +7,8 @@
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
     mc:Ignorable="d"
     Title="RevokeHook 配置工具"
-    Width="1040"
-    Height="820"
+    Width="1120"
+    Height="860"
     MinWidth="980"
     MinHeight="760"
     WindowStartupLocation="CenterScreen"
@@ -107,10 +107,14 @@
 
                 <Grid Grid.Row="2">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="310"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="8"/>
                         <RowDefinition Height="Auto"/>
@@ -121,7 +125,7 @@
                     <TextBlock Grid.Row="0"
                                Grid.Column="0"
                                VerticalAlignment="Center"
-                               Text="特征码1"/>
+                               Text="特征码1 (CoReplaceOriginMessageByRevoke)"/>
                     <TextBox Grid.Row="0"
                              Grid.Column="1"
                              x:Name="Signature1TextBox"/>
@@ -129,7 +133,7 @@
                     <TextBlock Grid.Row="2"
                                Grid.Column="0"
                                VerticalAlignment="Center"
-                               Text="特征码2"/>
+                               Text="特征码2 (DeleteMessages)"/>
                     <TextBox Grid.Row="2"
                              Grid.Column="1"
                              x:Name="Signature2TextBox"/>
@@ -137,10 +141,26 @@
                     <TextBlock Grid.Row="4"
                                Grid.Column="0"
                                VerticalAlignment="Center"
-                               Text="特征码3"/>
+                               Text="特征码3 (CoAddMessageToDB)"/>
                     <TextBox Grid.Row="4"
                              Grid.Column="1"
                              x:Name="Signature3TextBox"/>
+
+                    <TextBlock Grid.Row="6"
+                               Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Text="特征码4 (HandleMTVOIPSysMsg)"/>
+                    <TextBox Grid.Row="6"
+                              Grid.Column="1"
+                              x:Name="Signature4TextBox"/>
+
+                    <TextBlock Grid.Row="8"
+                               Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Text="特征码5 (OnMessageRevoke)"/>
+                    <TextBox Grid.Row="8"
+                             Grid.Column="1"
+                             x:Name="Signature5TextBox"/>
                 </Grid>
 
                 <Grid Grid.Row="4">
@@ -149,8 +169,15 @@
                         <ColumnDefinition Width="16"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-                    <Grid Grid.Column="0">
+                    <Grid Grid.Row="0" Grid.Column="0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="170"/>
                             <ColumnDefinition Width="*"/>
@@ -163,7 +190,7 @@
                                  IsReadOnly="True"/>
                     </Grid>
 
-                    <Grid Grid.Column="2">
+                    <Grid Grid.Row="0" Grid.Column="2">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="195"/>
                             <ColumnDefinition Width="*"/>
@@ -175,58 +202,64 @@
                                  x:Name="KeyFuncAdd2DBOffsetTextBox"
                                  IsReadOnly="True"/>
                     </Grid>
+
+                    <Grid Grid.Row="2" Grid.ColumnSpan="3">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="230"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   VerticalAlignment="Center"
+                                   Text="NotifyOneMessageAdded 偏移"/>
+                        <TextBox Grid.Column="1"
+                                 x:Name="KeyFuncNotifyOneMessageAddedOffsetTextBox"
+                                 IsReadOnly="True"/>
+                    </Grid>
+
+                    <Grid Grid.Row="4" Grid.Column="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="170"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   VerticalAlignment="Center"
+                                   Text="OnMessageRevoke 偏移"/>
+                        <TextBox Grid.Column="1"
+                                 x:Name="KeyFuncOnMessageRevokeOffsetTextBox"
+                                 IsReadOnly="True"/>
+                    </Grid>
+
+                    <Grid Grid.Row="4" Grid.Column="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="195"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   VerticalAlignment="Center"
+                                   Text="OnMessageRevoke 调用点"/>
+                        <TextBox Grid.Column="1"
+                                 x:Name="KeyFuncOnMessageRevokeCallOffsetTextBox"
+                                 IsReadOnly="True"/>
+                    </Grid>
                 </Grid>
 
                 <Grid Grid.Row="6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="16"/>
-                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="260"/>
                     </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="96"/>
-                        <RowDefinition Height="12"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
 
-                    <TextBox Grid.Row="0"
-                             Grid.Column="0"
-                             x:Name="DeleteMessagesChainTextBox"
-                             IsReadOnly="True"
-                             AcceptsReturn="True"
-                             VerticalScrollBarVisibility="Auto"
-                             HorizontalScrollBarVisibility="Auto"
-                             FontFamily="Consolas"
-                             FontSize="13"/>
-                    <TextBox Grid.Row="0"
-                             Grid.Column="2"
-                             x:Name="AddMessageToDbChainTextBox"
-                             IsReadOnly="True"
-                             AcceptsReturn="True"
-                             VerticalScrollBarVisibility="Auto"
-                             HorizontalScrollBarVisibility="Auto"
-                             FontFamily="Consolas"
-                             FontSize="13"/>
-
-                    <Grid Grid.Row="2"
-                          Grid.ColumnSpan="3">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="260"/>
-                        </Grid.ColumnDefinitions>
-
-                        <ProgressBar Grid.Column="0"
-                                     x:Name="SearchProgressBar"
-                                     Height="12"
-                                     Minimum="0"
-                                     Maximum="100"/>
-                        <TextBlock Grid.Column="2"
-                                   x:Name="SearchProgressTextBlock"
-                                   VerticalAlignment="Center"
-                                   Opacity="0.75"
-                                   Text="等待搜索"/>
-                    </Grid>
+                    <ProgressBar Grid.Column="0"
+                                 x:Name="SearchProgressBar"
+                                 Height="12"
+                                 Minimum="0"
+                                 Maximum="100"/>
+                    <TextBlock Grid.Column="2"
+                               x:Name="SearchProgressTextBlock"
+                               VerticalAlignment="Center"
+                               Opacity="0.75"
+                               Text="等待搜索"/>
                 </Grid>
             </Grid>
         </ui:Card>
