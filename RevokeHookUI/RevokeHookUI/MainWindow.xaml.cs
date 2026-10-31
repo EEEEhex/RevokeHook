@@ -33,7 +33,7 @@ public partial class MainWindow
     {
         EnsureLocalFiles();
 
-        AppendLog("程序启动 v5.2.0。");
+        AppendLog("程序启动 v5.2.1。");
         AppendLog("INI 路径: " + _iniPath);
         AppendLog("Config3 路径: " + _configPath);
 

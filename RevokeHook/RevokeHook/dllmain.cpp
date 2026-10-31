@@ -420,22 +420,6 @@ static bool IsExpectedRelativeCall(const void* call_address, const void* expecte
     return actual_target == expected_target;
 }
 
-static bool TryNotifyOneMessageAdded(void* message_manager, void* message)
-{
-    if (g_notifyOneMessageAdded == nullptr)
-        return false;
-
-    __try
-    {
-        g_notifyOneMessageAdded(message_manager, message);
-        return true;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-        return false;
-    }
-}
-
 static StdString* FindStdStringWithSig(uint64_t base_addr, size_t scan_range,
     const uint8_t* sig, size_t sig_len)
 {
@@ -465,6 +449,212 @@ static StdString* FindStdStringWithSig(uint64_t base_addr, size_t scan_range,
         }
     }
     return nullptr;
+}
+
+struct UiRevokeTipPatch
+{
+    uint8_t* address;
+    const char* replacement;
+    size_t length;
+};
+
+static size_t FindUiRevokeTipPatches(void* message, UiRevokeTipPatch* patches, size_t capacity)
+{
+    // Match the whole revoke phrase so a nickname containing "一条" is not edited.
+    static const char chinese_phrase[] =
+        "\xE6\x92\xA4\xE5\x9B\x9E\xE4\xBA\x86"
+        "\xE4\xB8\x80\xE6\x9D\xA1\xE6\xB6\x88\xE6\x81\xAF";
+    static const char chinese_replacement[] = "\xE5\xA6\x82\xE4\xB8\x8A";
+    static const char english_phrase[] = "recalled a message";
+    static const char english_replacement[] = "above msg";
+    struct Pattern
+    {
+        const char* phrase;
+        size_t phrase_length;
+        size_t replacement_offset;
+        const char* replacement;
+        size_t replacement_length;
+    };
+    const Pattern patterns[] = {
+        { chinese_phrase, sizeof(chinese_phrase) - 1, 9,
+          chinese_replacement, sizeof(chinese_replacement) - 1 },
+        { english_phrase, sizeof(english_phrase) - 1, 8,
+          english_replacement, sizeof(english_replacement) - 1 }
+    };
+    const uint64_t base = reinterpret_cast<uint64_t>(message);
+    constexpr size_t message_scan_size = 0x2E8;
+    constexpr size_t pointed_scan_limit = 0x400;
+    struct ScanTarget
+    {
+        uint64_t address;
+        size_t size;
+    };
+    ScanTarget targets[1 + message_scan_size / sizeof(uint64_t)] = {};
+    targets[0] = { base, message_scan_size };
+    size_t target_count = 1;
+    size_t count = 0;
+
+    if (!IsMemoryReadable(message, message_scan_size))
+        return 0;
+
+    // Follow only one level. Extension objects have a vtable; 
+    // skip raw string buffers, scalar values and executable/read-only data pointers.
+    for (size_t offset = 0; offset + sizeof(uint64_t) <= message_scan_size; offset += 8)
+    {
+        uint64_t pointer = *reinterpret_cast<const uint64_t*>(base + offset);
+        if (pointer < 0x10000 || pointer > 0x00007FFFFFFFFFFF || (pointer & 7) != 0 ||
+            !IsMemoryReadable(reinterpret_cast<void*>(pointer), sizeof(uint64_t)))
+            continue;
+
+        MEMORY_BASIC_INFORMATION region = {};
+        if (VirtualQuery(reinterpret_cast<void*>(pointer), &region, sizeof(region)) == 0 ||
+            (region.Protect & (PAGE_READWRITE | PAGE_WRITECOPY)) == 0)
+            continue;
+
+        uint64_t vtable = *reinterpret_cast<const uint64_t*>(pointer);
+        if (!IsMemoryReadable(reinterpret_cast<void*>(vtable), sizeof(uint64_t)))
+            continue;
+        uint64_t first_method = *reinterpret_cast<const uint64_t*>(vtable);
+        MEMORY_BASIC_INFORMATION method_region = {};
+        if (VirtualQuery(reinterpret_cast<void*>(first_method), &method_region, sizeof(method_region)) == 0 ||
+            method_region.State != MEM_COMMIT ||
+            (method_region.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0 ||
+            (method_region.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                PAGE_EXECUTE_WRITECOPY)) == 0)
+            continue;
+
+        bool duplicate = false;
+        for (size_t n = 0; n < target_count; ++n)
+            if (targets[n].address == pointer)
+                duplicate = true;
+        if (duplicate)
+            continue;
+
+        const size_t available = static_cast<size_t>(
+            reinterpret_cast<uint64_t>(region.BaseAddress) + region.RegionSize - pointer);
+        targets[target_count++] = { pointer, (std::min)(pointed_scan_limit, available) };
+        OutputDebugPrintf("[RevokeHook] UI pointed object: message_offset=0x%llX object=%p",
+            static_cast<unsigned long long>(offset), reinterpret_cast<void*>(pointer));
+    }
+
+    for (size_t target_index = 0; target_index < target_count; ++target_index)
+    {
+        const ScanTarget& target = targets[target_index];
+        for (const auto& pattern : patterns)
+        {
+            size_t scan_offset = 0;
+            while (scan_offset + sizeof(StdString) <= target.size)
+            {
+                StdString* text = FindStdStringWithSig(target.address + scan_offset,
+                    target.size - scan_offset,
+                    reinterpret_cast<const uint8_t*>(pattern.phrase), pattern.phrase_length);
+                if (text == nullptr)
+                    break;
+
+                scan_offset = static_cast<size_t>(reinterpret_cast<uint64_t>(text) - target.address) + 8;
+                auto* data = reinterpret_cast<uint8_t*>(
+                    *reinterpret_cast<const uint64_t*>(text->data_ptr));
+                OutputDebugPrintf("[RevokeHook] UI revoke candidate: object=%p field=0x%llX size=%lld text=%.*s",
+                    reinterpret_cast<void*>(target.address), reinterpret_cast<uint64_t>(text) - target.address, text->size,
+                    static_cast<int>((std::min)(text->size, int64_t(240))), reinterpret_cast<const char*>(data));
+                size_t field_matches = 0;
+                for (size_t i = 0; i + pattern.phrase_length <= static_cast<size_t>(text->size); ++i)
+                {
+                    if (memcmp(data + i, pattern.phrase, pattern.phrase_length) != 0)
+                        continue;
+
+                    uint8_t* address = data + i + pattern.replacement_offset;
+                    // Separate fields can contain XML and display text for the same message.
+                    // Multiple occurrences within one field remain ambiguous (e.g. a nickname).
+                    if (++field_matches > 1)
+                    {
+                        OutputDebugPrintf("[RevokeHook] UI revoke field has multiple phrases; keep original text");
+                        return 0;
+                    }
+                    bool duplicate = false;
+                    for (size_t n = 0; n < count; ++n)
+                        if (patches[n].address == address)
+                            duplicate = true;
+                    if (duplicate)
+                        continue;
+
+                    if (count == capacity)
+                    {
+                        OutputDebugPrintf("[RevokeHook] Too many UI revoke fields; keep original text");
+                        return 0;
+                    }
+                    MEMORY_BASIC_INFORMATION region = {};
+                    if (VirtualQuery(address, &region, sizeof(region)) == 0 ||
+                        region.State != MEM_COMMIT || (region.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0 ||
+                        (region.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
+                            PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) == 0)
+                    {
+                        OutputDebugPrintf("[RevokeHook] UI revoke field is not writable: %p", address);
+                        return 0;
+                    }
+
+                    patches[count].address = address;
+                    patches[count].replacement = pattern.replacement;
+                    patches[count].length = pattern.replacement_length;
+                    ++count;
+                }
+            }
+        }
+    }
+
+    OutputDebugPrintf("[RevokeHook] UI revoke matched fields: %llu", static_cast<unsigned long long>(count));
+    if (count == 0 && g_output_debeug_msg)
+    {
+        // Distinguish a changed field layout/encoding from duplicate matches on the next run.
+        for (size_t offset = 0; offset + sizeof(StdString) <= message_scan_size; offset += 8)
+        {
+            auto* text = reinterpret_cast<const StdString*>(base + offset);
+            if (!IsMemoryReadable(text, sizeof(StdString)) || text->size <= 0 ||
+                text->size > 0x10000 || text->capability < text->size || text->capability > 0x100000)
+                continue;
+            const char* data = text->capability < 16 ? text->data_ptr :
+                reinterpret_cast<const char*>(*reinterpret_cast<const uint64_t*>(text->data_ptr));
+            if (IsMemoryReadable(data, static_cast<size_t>(text->size)))
+                OutputDebugPrintf("[RevokeHook] UI text field: offset=0x%llX size=%lld text=%.*s",
+                    static_cast<unsigned long long>(offset), text->size,
+                    static_cast<int>((std::min)(text->size, int64_t(240))), data);
+        }
+    }
+    return count;
+}
+
+static bool TryNotifyOneMessageAdded(void* message_manager, void* message)
+{
+    if (g_notifyOneMessageAdded == nullptr)
+        return false;
+
+    UiRevokeTipPatch patches[8] = {};
+    __try
+    {
+        const size_t count = FindUiRevokeTipPatches(message, patches, 8);
+        if (count != 0)
+        {
+            for (size_t i = 0; i < count; ++i)
+            {
+                const UiRevokeTipPatch& patch = patches[i];
+                memcpy(patch.address, patch.replacement, patch.length);
+                OutputDebugPrintf("[RevokeHook] UI revoke tip replaced: %p", patch.address);
+            }
+        }
+        else
+        {
+            OutputDebugPrintf("[RevokeHook] UI revoke tip unchanged; see field diagnostics above");
+        }
+
+        // Keep the cache synchronized with XML. Asynchronous subscribers share
+        // the extension object, so its corrected text must remain in place.
+        g_notifyOneMessageAdded(message_manager, message);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
 }
 
 static int FindZeroArgIndex(
